@@ -1,0 +1,107 @@
+# amyloevo workflow configuration.
+#
+# Every path is relative to the workflow's working directory unless absolute, so
+# this file moves between a laptop and a server unchanged. Nothing here is
+# machine-specific except `resources` and the tool paths under `tools`.
+
+# --- Input ------------------------------------------------------------------
+# One multifasta of orthologues per protein of interest (an EggNOG group).
+# Filenames give the protein ids: <orthologs_dir>/<protein>.fasta
+orthologs_dir: "data/orthologs"
+orthologs_suffix: ".fasta"
+
+# The reference sequence, by id, inside each group. When absent from a group the
+# workflow fails for that protein rather than quietly measuring conservation with
+# no anchor -- the reference is what APR coordinates are reported against.
+reference:
+  # How to recognise it in a header. "taxid" matches the EggNOG taxid prefix.
+  match: taxid
+  value: "9606"          # Homo sapiens
+  required: true
+
+# Header format: eggnog | uniprot | ncbi. Strict parsing by default -- an
+# orthologue with no taxon cannot be placed on the species tree, and a set with
+# several such orthologues yields a phylogenetic test on a subset nobody chose.
+header_format: eggnog
+header_strict: true
+
+# --- Redundancy: correct it ONCE -------------------------------------------
+# Clustering and phylogenetic weighting address the same problem -- densely
+# sampled clades counting many times in a per-column fraction. Applying both
+# double-corrects and leaves a denominator nobody can reconstruct.
+#   method: cluster    -> CD-HIT/MMseqs2 reduces the set; weighting is disabled
+#   method: weight     -> every sequence is kept; conservation is tree-weighted
+#   method: none       -> neither (report only; expect clade bias)
+# `cap_only` clustering is a compute bound, not a sampling correction, and is
+# recorded separately so the two are never confused in the provenance.
+redundancy:
+  method: weight
+  cluster:
+    tool: mmseqs2           # mmseqs2 | cdhit
+    identity: 0.95
+    coverage: 0.8
+    cap_only: false
+
+# --- Alignment --------------------------------------------------------------
+# The aligner and its parameters are recorded with every result: alignment choice
+# moves column assignments, so two runs with different aligners are not
+# comparable, and the residual is a difference of two alignment-dependent terms.
+align:
+  tool: mafft               # mafft | muscle
+  mafft_args: "--auto --anysymbol --quiet"
+  muscle_args: ""
+
+# --- Predictor panel --------------------------------------------------------
+# The LOCAL panel. Five of aggressor-wrappers' twelve predictors are web-only
+# (aggrescan, foldamyloid, waltz, pasta, aggreprot) and cannot serve 10^4-10^5
+# sequences. The reference sequence is scored by this same panel, as one member
+# of its own alignment -- never compared against a twelve-tool call.
+predict:
+  panel: [appnn, archcandy, crossbeta, tango, amylogram, amylodeep]
+  aggressor_config: "config/aggressor.cfg"
+  consensus: fractional_consensus
+  apr_threshold: 0.5        # fraction of the panel calling a residue
+  # Skip prediction entirely and read APR intervals from a file instead. Gives
+  # sequence conservation and the occupancy bookkeeping, but not APR conservation
+  # and therefore not the residual.
+  from_intervals: null      # e.g. "data/known_aprs.tsv"
+
+# --- Conservation -----------------------------------------------------------
+conserve:
+  # Columns below this occupancy are reported UNDEFINED, not conserved: with a
+  # handful of sequences the entropy is near zero whatever the residues are, so
+  # every insertion would otherwise enter as a maximally conserved site.
+  min_occupancy: 0.5
+  background: swissprot     # swissprot | uniform
+
+# --- Phylogenetics ----------------------------------------------------------
+# APR presence across species is not independent -- shared ancestry makes a naive
+# clade correlation pseudoreplication.
+phylo:
+  tree: infer               # infer | species | none
+  iqtree_args: "-m MFP -B 1000 --quiet"
+  # Binary-trait signal: fritz_purvis_d | pagel_lambda | both
+  signal: both
+  # Dependency of APR presence on divergence and clade
+  regression: phyloglm
+  species_tree: null        # a Newick file, when tree: species
+
+# --- Visualisation ----------------------------------------------------------
+viz:
+  logos: true
+  meme_export: true         # APR segments in MEME format for motif discovery
+  itol: true                # annotation files for iTOL
+
+# --- Execution --------------------------------------------------------------
+tools:
+  mafft: mafft
+  muscle: muscle
+  mmseqs: mmseqs
+  cdhit: cd-hit
+  iqtree: iqtree2
+  aggressor: aggressor-wrappers
+
+resources:
+  align_threads: 4
+  predict_threads: 4
+  tree_threads: 4

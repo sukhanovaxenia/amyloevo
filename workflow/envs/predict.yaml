@@ -1,0 +1,7 @@
+name: amyloevo-predict
+channels: [conda-forge, bioconda]
+dependencies:
+  - python>=3.10
+  # aggressor-wrappers and its local panel are installed separately: the panel
+  # includes licensed and platform-specific tools (TANGO) that cannot be resolved
+  # from a channel. Point config.tools.aggressor at an existing installation.

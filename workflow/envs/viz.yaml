@@ -1,0 +1,7 @@
+name: amyloevo-viz
+channels: [conda-forge]
+dependencies:
+  - python>=3.10
+  - matplotlib
+  - pandas
+  - logomaker

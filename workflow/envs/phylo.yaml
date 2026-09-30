@@ -1,0 +1,13 @@
+name: amyloevo-phylo
+channels: [conda-forge, bioconda]
+dependencies:
+  - iqtree
+  - python>=3.10
+  - pandas
+  - dendropy
+  # Phylogenetic comparative methods for a BINARY trait: APR presence across
+  # species is not independent, so the signal and regression both need the tree.
+  - r-base
+  - r-ape
+  - r-phylolm
+  - r-caper

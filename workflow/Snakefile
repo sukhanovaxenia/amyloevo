@@ -1,0 +1,53 @@
+"""amyloevo -- evolutionary conservatism of amyloidogenic regions.
+
+Snakemake owns the running; the package owns the logic. Every rule here is thin:
+read inputs, call one function from `amyloevo`, write outputs. When a rule starts
+holding logic worth testing, that logic belongs in `src/amyloevo/` where it can be
+unit-tested -- a Snakemake rule cannot be.
+
+See docs/DESIGN.md for why the measures are what they are, and section 6 for this
+split.
+"""
+
+from pathlib import Path
+
+
+configfile: "config/config.yaml"
+
+
+include: "rules/common.smk"
+include: "rules/redundancy.smk"
+include: "rules/align.smk"
+include: "rules/predict.smk"
+include: "rules/conserve.smk"
+include: "rules/phylo.smk"
+include: "rules/viz.smk"
+
+
+rule all:
+    input:
+        # The result: one conservation table per protein, plus the run-level
+        # summary that carries the fitted slope -- without which the residual
+        # column must not be read as conservation-corrected.
+        expand("results/conserve/{protein}.tsv", protein=PROTEINS),
+        "results/summary/conservation_summary.tsv",
+        "results/summary/provenance.yaml",
+        *phylo_targets(),
+        *viz_targets(),
+
+
+rule provenance:
+    """Record everything a second run would need to reproduce this one.
+
+    The residual is a difference of two alignment-dependent quantities, so a
+    result without its aligner, panel and occupancy threshold recorded is not
+    reproducible even in principle.
+    """
+    output:
+        "results/summary/provenance.yaml",
+    params:
+        config=config,
+    conda:
+        "envs/core.yaml"
+    script:
+        "scripts/provenance.py"

@@ -1,0 +1,144 @@
+init: amyloevo -- evolutionary conservatism of APRs across orthologues
+
+Scaffold plus the three modules that need no external tool, so the parts where a
+silent error would corrupt every downstream number are written and tested before
+anything depends on them.
+
+The question, and why it needs two measures
+
+  Whether APR positions are conserved is not the question. Conserved positions
+  are conserved for many reasons, and an APR inside a conserved domain reports on
+  the domain rather than on amyloidogenicity. What would distinguish selection on
+  the PROPERTY is a column whose residues turn over while the amyloidogenic call
+  persists -- and that is only visible as a residual between sequence
+  conservation and APR conservation. Both are therefore measured, and the
+  residual is the result. docs/DESIGN.md carries the argument in full.
+
+project/columns.py -- the coordinate spine
+
+  Every conservation measure is per alignment column; every prediction is per
+  residue of an individual sequence. Nothing else in the package converts between
+  them by hand.
+
+  Three properties make it worth isolating. The offset is NOT constant: a gap
+  displaces every later residue in that sequence alone, so "add the gap count at
+  the start of the region" mislocates the region's end, and a test pins that with
+  a gap placed inside KLVFFA. The mapping is partial in both directions, and the
+  missing case returns None rather than 0 or -1, because a sentinel invites
+  arithmetic on it. And the numbering is 1-based on both axes, matching the
+  predictors and every alignment viewer a reader will check against; the crossing
+  to 0-based indices happens once, here.
+
+  columns_for_region and region_span answer different questions -- the residues'
+  own columns, and the span a viewer would highlight, interior gaps included --
+  so neither is the other's default.
+
+  transfer() returns None where the orthologue is gapped. That is the meaningful
+  answer rather than a failure: the orthologue has no residue there, and an APR
+  cannot be conserved at a position that does not exist.
+
+conserve/scores.py -- entropy, JSD, APR fraction, residual
+
+  Gaps are excluded from a column's distribution rather than treated as a 21st
+  character: a gap is missing evidence, not a conserved residue, and counting it
+  makes an unobserved column look variable.
+
+  JSD is measured against real Swiss-Prot background frequencies, not a uniform
+  one. A column of pure tryptophan is more surprising than a column of pure
+  leucine; entropy calls both zero and only a background distribution can tell
+  them apart. A test pins exactly that pair.
+
+  Sparsely occupied columns are returned UNDEFINED rather than scored. Three
+  residues out of two hundred give entropy near zero whatever they are, so
+  without the gate every insertion would enter the analysis as a maximally
+  conserved site -- the inverse of the truth.
+
+  apr_residual() regresses APR conservation on sequence conservation and returns
+  what is left. An undefined fit returns no residuals rather than zeros, since
+  zero reads as "fully explained by sequence", which is the opposite of "not
+  measurable".
+
+  One test was written wrong and is worth recording. It checked the residual on a
+  balanced 2x2 of (conserved/variable) x (APR/no APR), which makes the two
+  variables uncorrelated BY CONSTRUCTION: the slope collapses to whatever the
+  background frequencies leave behind (-0.38 here, from G scoring 0.81 against
+  L's 0.76), and the ordering of the residuals became an artefact rather than a
+  property of the metric. The residual is defined against a fitted trend, so the
+  test now establishes a trend first and probes it. A second test pins the
+  degenerate regime explicitly: with no trend, the residual reduces to a centred
+  apr_fraction and must not be read as conservation-corrected.
+
+io/headers.py -- EggNOG, UniProt, NCBI
+
+  Strict by default: one unreadable header raises, naming the format tried and
+  the first few offenders. An orthologue with no taxon cannot be placed on the
+  species tree, so quietly analysing whichever headers matched would produce a
+  phylogenetic test run on a subset nobody chose, with no recoverable
+  denominator.
+
+What is specified but not written
+
+  align (MAFFT/MUSCLE), predict (the aggressor-wrappers panel over orthologues),
+  phylo (phylogenetic signal and regression), viz (logos, MEME export). Each
+  needs an external tool, which is exactly why the pure modules came first.
+
+  Two constraints recorded in DESIGN.md before any of that is built. Five of the
+  twelve predictors have no local arm, so an orthologue sweep of 10^4-10^5
+  sequences must run the seven-tool local panel -- and the reference proteins
+  must be RE-RUN through that same panel, or every orthologue appears to have
+  lost APRs that were never tested for. And the phylogenetic question cannot be
+  answered by correlation: species share ancestry, so it needs Fritz & Purvis's D
+  or Pagel's lambda for signal, and phylogenetic logistic regression for the
+  dependency.
+
+workflow/ -- Snakemake owns the running, the package owns the logic
+
+  Counting the external programs (MAFFT/MUSCLE, MMseqs2/CD-HIT, IQ-TREE, the
+  predictor panel) against 372 proteins gives on the order of a thousand jobs with
+  a real dependency graph and partial failures. That is a workflow manager's job,
+  and a Python package driving it with subprocess loops would be a worse
+  Snakemake. But a Snakemake rule is not unit-testable, and the steps where being
+  quietly wrong is possible -- column mapping, the occupancy gate, the residual's
+  undefined case -- are exactly the ones needing tests. So rules stay thin: read
+  inputs, call one library function, write outputs.
+
+  Five scripts are implemented (reference lookup, alignment metadata, per-column
+  conservation, the run-level fit, provenance) and five are stubs that raise with
+  what they must produce, so --dryrun reports the whole graph rather than a missing
+  input and the remaining work is written where it happens.
+
+  Three config choices carry scientific consequences and are enforced rather than
+  documented:
+
+  Redundancy is corrected ONCE. Clustering and phylogenetic weighting address the
+  same bias -- densely sampled clades counting many times in a per-column fraction
+  -- so method: cluster together with cluster.cap_only: true is rejected at parse
+  time. Clustering to bound compute and clustering to fix sampling are different
+  claims about the result, and the provenance records which was made.
+
+  The aligner and its arguments are written beside every alignment with a
+  checksum. Column assignments move with the aligner and the residual is a
+  difference of two column-dependent terms, so this is part of the result rather
+  than a log line.
+
+  predict.from_intervals skips prediction entirely, dropping predict_panel and
+  apr_calls from the DAG -- and with them the residual, which needs a call per
+  orthologue. The reduced mode is legitimate and its cost is explicit.
+
+  The residual is fitted ONCE at run level, not per protein: a few hundred columns
+  give a slope with no stability. The slope itself is an output, and
+  residual_fit.yaml states in words whether the residual means anything -- near
+  zero, it collapses to a centred APR fraction and is not conservation-corrected.
+
+  Verified: the DAG resolves to 14 jobs for one protein, and the four switches that
+  should change it do (clustering adds a job, from_intervals removes two,
+  tree: none removes three, muscle replaces mafft). Both guards fire -- the
+  double-correction refusal and the empty-input refusal. conserve.py and
+  summarise.py were run end to end on a three-orthologue group in which one
+  sequence carries a two-residue gap before its APR: its residues 16-18 land in
+  alignment columns 18-20, and the table shows apr_fraction 1.0 at those columns
+  against 0.667 at 16, 17 and 21. Matching residue numbers instead of columns would
+  have put the agreement in the wrong place, which is the whole reason the
+  coordinate spine exists.
+
+54 tests, no external tool required to run them.

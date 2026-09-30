@@ -1,0 +1,5 @@
+name: amyloevo-align
+channels: [conda-forge, bioconda]
+dependencies:
+  - mafft
+  - muscle

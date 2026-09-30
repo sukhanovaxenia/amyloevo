@@ -1,0 +1,23 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+
+# Analysis outputs and intermediates: alignments and per-orthologue predictions
+# are large and reproducible from the inputs plus the recorded parameters.
+alignments/
+predictions/
+results/
+*.aln
+*.fasta.aln
+
+# Snakemake
+.snakemake/
+results/
+logs/
+data/
