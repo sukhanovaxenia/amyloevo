@@ -142,3 +142,120 @@ def test_transfer_returns_none_where_the_orthologue_is_gapped():
 @pytest.mark.parametrize("character,expected", [("-", True), (".", True), ("~", True), ("A", False)])
 def test_gap_characters(character, expected):
     assert is_gap(character) is expected
+
+
+# --------------------------------------------------------------------------- #
+# Array projections
+# --------------------------------------------------------------------------- #
+class TestArrayProjections:
+    """The whole-alignment forms, used by the block and occupancy work.
+
+    These are 0-based on the column axis while the mapping classes above are
+    1-based, so the tests pin the convention rather than trusting the names.
+    """
+
+    def test_residue_to_column_skips_gaps(self) -> None:
+        import numpy as np
+
+        from amyloevo.project.columns import residue_to_column
+
+        np.testing.assert_array_equal(
+            residue_to_column("MK--LV"), np.array([0, 1, 4, 5])
+        )
+
+    def test_column_to_residue_marks_gaps_with_zero(self) -> None:
+        import numpy as np
+
+        from amyloevo.project.columns import column_to_residue
+
+        np.testing.assert_array_equal(
+            column_to_residue("MK--LV"), np.array([1, 2, 0, 0, 3, 4])
+        )
+
+    def test_the_two_projections_are_inverse_where_defined(self) -> None:
+        from amyloevo.project.columns import column_to_residue, residue_to_column
+
+        aligned = "M-KL--VFF-A"
+        cols = residue_to_column(aligned)
+        back = column_to_residue(aligned)
+        for residue_index, column in enumerate(cols):
+            assert back[column] == residue_index + 1
+
+    def test_projecting_a_mask_leaves_gap_columns_false(self) -> None:
+        """A sequence that lacks the residue cannot have an APR there.
+
+        Filling the interior gaps of a region would inflate it by whatever
+        another species inserted in the middle of it.
+        """
+        import numpy as np
+
+        from amyloevo.project.columns import project_mask
+
+        # Residues M K L V; a mask over K..L spans a two-column gap.
+        mask = np.array([False, True, True, False])
+        out = project_mask(mask, "MK--LV", 6)
+        np.testing.assert_array_equal(
+            out, np.array([False, True, False, False, True, False])
+        )
+
+    def test_projection_handles_all_gap_characters(self) -> None:
+        import numpy as np
+
+        from amyloevo.project.columns import project_mask
+
+        out = project_mask(np.array([True, True]), "M.~K", 4)
+        np.testing.assert_array_equal(out, np.array([True, False, False, True]))
+
+    def test_a_short_mask_projects_its_overlap_rather_than_failing(self) -> None:
+        """A predictor run on a slightly different sequence version happens."""
+        import numpy as np
+
+        from amyloevo.project.columns import project_mask
+
+        out = project_mask(np.array([True]), "MKLV", 4)
+        np.testing.assert_array_equal(out, np.array([True, False, False, False]))
+
+    def test_an_empty_mask_projects_to_nothing(self) -> None:
+        import numpy as np
+
+        from amyloevo.project.columns import project_mask
+
+        assert not project_mask(np.array([], dtype=bool), "MKLV", 4).any()
+
+    def test_mask_from_regions_is_one_based_inclusive(self) -> None:
+        import numpy as np
+
+        from amyloevo.project.columns import mask_from_regions
+
+        np.testing.assert_array_equal(
+            mask_from_regions([(2, 4)], 6),
+            np.array([False, True, True, True, False, False]),
+        )
+
+    def test_mask_from_regions_accepts_objects_with_start_and_end(self) -> None:
+        from dataclasses import dataclass
+
+        from amyloevo.project.columns import mask_from_regions
+
+        @dataclass
+        class Region:
+            start: int
+            end: int
+
+        assert mask_from_regions([Region(1, 2)], 4).tolist() == [
+            True, True, False, False
+        ]
+
+    def test_a_region_past_the_end_is_clipped_not_an_error(self) -> None:
+        from amyloevo.project.columns import mask_from_regions
+
+        assert mask_from_regions([(3, 99)], 4).tolist() == [
+            False, False, True, True
+        ]
+
+    def test_overlapping_regions_union(self) -> None:
+        from amyloevo.project.columns import mask_from_regions
+
+        assert mask_from_regions([(1, 3), (2, 5)], 6).tolist() == [
+            True, True, True, True, True, False
+        ]

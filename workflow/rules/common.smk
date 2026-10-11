@@ -81,3 +81,34 @@ def viz_targets():
     if viz.get("itol") and config["phylo"]["tree"] != "none":
         targets += expand("results/viz/itol/{protein}_apr.txt", protein=PROTEINS)
     return targets
+
+
+# --- Groups, taxonomy and the signal screen --------------------------------
+def ortholog_fasta(protein):
+    """The raw orthologue group. Metadata is read from the headers of the FULL
+    set, not of the clustered representatives: a species dropped by clustering
+    still has a taxon, and losing it from the metadata would quietly shrink
+    every rank-wise denominator."""
+    return str(ORTHOLOG_DIR / f"{protein}{SUFFIX}")
+
+
+#: Paralogue assignment runs only when references are configured. With fewer
+#: than two the rule writes an empty table and says why -- the correct outcome
+#: for a set that really is one orthologue group.
+GROUP_REFERENCES = config["group"].get("references") or {}
+DO_ASSIGN = len(GROUP_REFERENCES) >= 2
+
+
+def group_targets():
+    targets = [
+        *expand("results/meta/{protein}.tsv", protein=PROTEINS),
+        *expand("results/blocks/{protein}.tsv", protein=PROTEINS),
+        *expand(
+            "results/summary/{protein}.taxonomic_signal.tsv", protein=PROTEINS
+        ),
+    ]
+    if config["viz"].get("group_figures", True):
+        targets += expand(
+            "results/viz/groups/{protein}_occupancy.png", protein=PROTEINS
+        )
+    return targets

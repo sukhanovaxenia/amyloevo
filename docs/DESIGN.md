@@ -86,7 +86,33 @@ Per alignment column, over the orthologues present at that column:
   stays amyloidogenic while its residues change; a column where both are high is
   simply a conserved column and says nothing specific about amyloid.
 
-## 4. Two traps
+## 4. Four traps
+
+**The set is not an orthologue set.** An "orthologue set" from EggNOG or STRING
+is routinely a paralogue family. The FXR1 set that prompted `group/` is 372
+sequences described as FXR1 orthologues and is in fact the whole FMR1/FXR1/FXR2
+family: 116 FXR1, 101 FMR1, 97 FXR2 and 58 single-copy invertebrate genes, over
+152 taxa of which 82 contribute exactly three. The paralogue differences are the
+larger ones — FXR1 and FMR1 differ roughly twofold in APR load — so every
+statement of the form "conserved across orthologues" computed on the pooled set
+is a statement about a mixture.
+
+So the group is established *before* conservation is measured, and from the data
+rather than from the set's name: `group.assign` scores every sequence by identity
+to caller-supplied references over the columns where all references carry a
+residue. The best-vs-second **margin** is the only honest confidence available,
+and a sequence 48% identical to one reference and 47% to another has not been
+assigned, it has been rounded.
+
+Which sequences sit *outside* the reference groups is a separate, declared input,
+not an inference. On the FXR1 set every one of the 58 invertebrate genes falls
+below the 0.05 margin — a perfectly sensitive screen — but so do 20 vertebrate
+sequences that genuinely belong to a paralogue. A low margin means *ambiguous*;
+it does not mean *pre-duplication*, and reading it that way moves those 20 out
+of the group they belong to. `copy_number` reports sequences per taxon and marks
+the deficient ones; it does not call them ancestral, because incomplete
+sampling, gene loss and predating the duplication are different facts and only a
+tree separates them.
 
 **Pseudoreplication.** "Does APR presence depend on divergence or species group"
 cannot be answered by correlation. Species share ancestry, so the observations
@@ -95,6 +121,40 @@ Phylogenetic signal in a binary trait: Fritz & Purvis's *D*, or Pagel's λ.
 The dependency itself: phylogenetic logistic regression (`phyloglm`). The
 species tree comes from NCBI taxonomy or EggNOG's own tree; a gene tree would be
 the stricter choice and is a later option, not the default.
+
+`phylo.signal` is the screen that comes before any of that: a PERMANOVA per rank
+on the APR profiles, run **inside** a paralogue group, because every mammal in a
+three-paralogue family contributes one of each and so "mammal" and "paralogue"
+explain the same variance. It answers only whether profiles cluster by clade,
+which nested sampling alone produces; it is what decides whether building the
+tree is worth it, and never a substitute for the tree.
+
+Two guards sit on it, both put there by wrong answers it gave first:
+
+- **Replication.** Pseudo-F and R² rise mechanically as levels approach
+  singletons: with 56 families among 77 sequences, within-group scatter is zero
+  by construction. A rank is dropped unless enough of its levels are replicated,
+  and the surviving level and member counts are reported.
+- **Degenerate profiles.** Level replication is necessary and not sufficient.
+  FXR2 at order level passes every replication filter — 7 orders, 48 sequences,
+  no singletons — and still returns R² = 0.989 with pseudo-F = 591, because
+  those 48 sequences carry **7 distinct block profiles** between them and three
+  orders are internally identical. Within-group scatter is 1% of the total and
+  R² follows arithmetically. FXR1 over the same ranks has 13 distinct profiles
+  among 58 sequences and returns R² = 0.658. The permutation *p* is honest in
+  both cases, so the row is reported rather than dropped, flagged, and with the
+  distinct-profile count beside it. The sentence to write is "FXR2's APR
+  architecture takes only seven forms and they are clade-specific", not "order
+  explains 99% of the variance".
+
+**Families of tests.** Four nested ranks on one dataset is four tests; one test
+per protein across a sweep is hundreds. Both are adjusted with Benjamini-Hochberg
+(`stats.multiple`), and the per-protein case is where the adjustment earns its
+keep: on the FXR1 termini analysis the direction is unanimous (91/91, sign test
+*p* = 8×10⁻²⁸) while **no single protein** is significant at FDR 0.05, because
+each carries about four APRs and the smallest attainable *p* sits above the
+threshold. Those answer different questions and both belong in the report; an
+unadjusted per-protein table answers neither.
 
 **Boundary inheritance.** Every APR here is a window-derived call and carries the
 ±(`window_size` − 1) boundary uncertainty the predictors impose. `coverage_depth`
@@ -107,18 +167,30 @@ exactly the contrast in §3.
 
 | module | responsibility | external dependency |
 |---|---|---|
-| `io` | read the per-protein orthologue multifasta (EggNOG), parse taxid and species from headers | none |
+| `io.headers` | read the per-protein orthologue multifasta (EggNOG), parse taxid and species from headers | none |
+| `io.taxonomy` | taxid → name and lineage, from an NCBI taxdump or a caller's table; retired taxids resolved through `merged.dmp` | none |
+| `io.annotate` | the metadata table (`taxid`, `tax_name`, `protein`, rank columns) and the display `label` every figure reads | none |
 | `align` | MAFFT / MUSCLE wrapper; records aligner, version and parameters | the aligner binary |
 | `project` | `(species, residue_number) ↔ alignment_column`, gap-aware in both directions | none |
+| `group` | paralogue assignment from references, margin, copy number per taxon (§4) | none |
 | `predict` | call `aggressor-wrappers` on every orthologue; consume its merged tables | aggressor-wrappers |
 | `conserve` | the three measures of §3 | none |
-| `phylo` | species tree, phylogenetic signal, phylogenetic regression | R `phyloglm` / `caper`, or a Python equivalent |
-| `viz` | per-APR sequence logos; MEME-format export for motif discovery over APR segments | logomaker / MEME suite |
+| `stats` | multiple-comparison adjustment (BH, Holm) shared by every family of tests | none |
+| `phylo` | taxonomic signal screen (§4); later: species tree, phylogenetic regression | scipy; later R `phyloglm` / `caper` |
+| `viz` | group-wise occupancy, block heatmap, paired load; later per-APR logos and MEME export | matplotlib; later logomaker / MEME |
 
 `predict` consumes `aggressor-wrappers`; it does not reimplement predictors.
-`conserve` consumes `project`; it never touches an alignment directly. The
+`conserve` consumes `project`; it never touches an alignment directly. `phylo`
+and `viz` consume `group`, never the other way round: grouping is a property of
+the sequences and must not depend on what is being plotted or tested. The
 modules with no external dependency are testable without installing anything,
 which is why they are built first.
+
+Nothing in `group`, `phylo`, `stats` or `viz` is specific to FXR1, to
+vertebrates, or to three paralogues. The references define the groups; the rank
+columns define the ranks. FXR1 is the validation case, not the design: the
+generalised code reproduces the FXR1-specific implementation's identities to
+1.1×10⁻¹⁶, all 372 group calls, and all eight rows of its PERMANOVA table.
 
 ## 6. Snakemake owns the running; the package owns the logic
 

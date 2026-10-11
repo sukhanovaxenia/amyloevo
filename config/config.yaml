@@ -66,6 +66,93 @@ predict:
   # and therefore not the residual.
   from_intervals: null      # e.g. "data/known_aprs.tsv"
 
+# --- Taxonomy and labelling -------------------------------------------------
+# Resolving taxids is not cosmetic. A taxon that fails to resolve leaves the
+# analysis silently: it is dropped from every rank-wise denominator without ever
+# being counted as missing. `results/meta/<protein>.unresolved.txt` is the list,
+# and it is an output rather than a log line for that reason.
+taxonomy:
+  # An UNPACKED NCBI taxdump directory (names.dmp, nodes.dmp, merged.dmp).
+  #   curl -O https://ftp.ncbi.nlm.nih.gov/pub/taxonomy/taxdump.tar.gz
+  #   mkdir -p data/taxdump && tar -xzf taxdump.tar.gz -C data/taxdump
+  # merged.dmp matters: an orthologue set assembled a few years ago carries
+  # taxids NCBI has since merged, and without it those species resolve to
+  # nothing.
+  taxdump: null             # e.g. "data/taxdump"
+  # Fallback when there is no taxdump: a TSV with a `taxid` column and whatever
+  # rank columns it has. Cheaper, and only as complete as the file.
+  table: null               # e.g. "data/taxonomy.tsv"
+  # Ranks carried into the metadata table and tested by the signal screen.
+  # Nested, so they are four dependent tests on one dataset and the p-values are
+  # BH-adjusted across them.
+  ranks: [phylum, class, order, family, genus, species]
+
+# How a sequence is named on an axis. `9606.ENSP00000350170` is unique, stable
+# and unreadable; `Homo sapiens FXR1` is readable and not guaranteed unique. So:
+# label by meaning, fall back down a chain, disambiguate collisions with the
+# accession on EVERY member of the colliding set, and keep `id` on the table for
+# joins and provenance.
+#
+# Fields: {id} {protein} {taxid} {tax_name} {group} {protein_name} and every
+# rank above. A figure of one species' paralogues wants "{group}" alone; one
+# group's orthologues wants "{tax_name}".
+label:
+  template: "{tax_name} {group}"
+  reference: "reference"    # axis label for the reference coordinate
+
+# --- Paralogue groups: establish them BEFORE measuring conservation ---------
+# An "orthologue set" from EggNOG or STRING is routinely a paralogue family, and
+# the paralogue differences are usually the larger ones. The FXR1 set that
+# prompted this section is 372 sequences described as FXR1 orthologues and is in
+# fact the whole FMR1/FXR1/FXR2 family; FXR1 and FMR1 differ roughly twofold in
+# APR load, which swamps anything within either group.
+#
+# Leave `references` null for a set that really is one orthologue group --
+# inventing a split is worse than having none.
+group:
+  # sequence id -> group name. Typically one well-annotated species' paralogues,
+  # and they must be members of the aligned set, not separate sequences.
+  #   9606.ENSP00000350170: FXR1
+  #   9606.ENSP00000359506: FMR1
+  #   9606.ENSP00000250113: FXR2
+  references: null
+  # Below this best-vs-second identity margin an assignment is a rounding, not a
+  # call, and the sequence is excluded from any BETWEEN-group contrast. On the
+  # FXR1 set 20 of 314 assigned sequences (6.4%) fall below it.
+  min_margin: 0.05
+  # Sequences OUTSIDE the reference groups -- lineages predating the duplication
+  # that produced them. A metadata column name holding a truthy flag, or an
+  # explicit list of ids. This cannot be inferred from the margin: on the FXR1
+  # set every one of the 58 invertebrate genes falls below 0.05 (a perfectly
+  # sensitive screen) but so do 20 vertebrate sequences that genuinely belong to
+  # a paralogue. A low margin means AMBIGUOUS, not PRE-DUPLICATION.
+  outgroup: null            # e.g. "is_invertebrate", or [id1, id2, ...]
+  outgroup_label: outgroup
+
+# --- APR blocks: the features, which matter more than the test --------------
+# A per-column profile over a long alignment is sparse -- in the FXR1 family each
+# protein covers 40-90 of the 623 columns ever covered -- so clustering or
+# testing it directly measures mostly shared absence. Columns are grouped into
+# blocks and each sequence scored by the fraction of each block it covers.
+#
+# Blocks are defined per group and then merged: a block carried by a minority of
+# one group is exactly the discriminative feature a group contrast needs, and the
+# pooled definition misses it. min_occupancy is therefore LOWER than
+# conserve.min_occupancy on purpose -- defining a feature and calling a column
+# conserved are different decisions.
+blocks:
+  min_occupancy: 0.35
+  min_coverage: 0.4
+  min_width: 3
+  # Dips of up to this many columns are bridged. One column below threshold
+  # inside a solid run is one indel in one sequence, and splitting there leaves
+  # two sub-width fragments that are both dropped -- so the block disappears
+  # rather than merely shifting.
+  max_gap: 2
+  # A group smaller than this does not define blocks: with four sequences every
+  # threshold lands on a count of one or two.
+  min_group: 5
+
 # --- Conservation -----------------------------------------------------------
 conserve:
   # Columns below this occupancy are reported UNDEFINED, not conserved: with a
@@ -86,9 +173,28 @@ phylo:
   regression: phyloglm
   species_tree: null        # a Newick file, when tree: species
 
+  # --- The taxonomic signal screen ------------------------------------------
+  # PERMANOVA per rank on the block profiles, run WITHIN each paralogue group:
+  # every member of a three-paralogue family contributes one of each, so clade
+  # and paralogue explain the same variance in a pooled test.
+  #
+  # This screen is NOT the phylogenetic test above and does not discharge it. A
+  # rank effect means profiles CLUSTER by clade, which nested sampling alone
+  # produces. It decides whether building the tree is worth the compute.
+  permutations: 999
+  seed: 0
+  # A level needs this many members to be tested, and a rank this many surviving
+  # levels and sequences. Without them pseudo-F and R^2 rise mechanically as
+  # levels approach singletons: with 56 families among 77 sequences, within-group
+  # scatter is zero by construction and R^2 goes to 1 whatever the data say.
+  min_per_level: 3
+  min_levels: 4
+  min_members: 12
+
 # --- Visualisation ----------------------------------------------------------
 viz:
   logos: true
+  group_figures: true    # occupancy, block heatmap, paired load
   meme_export: true         # APR segments in MEME format for motif discovery
   itol: true                # annotation files for iTOL
 

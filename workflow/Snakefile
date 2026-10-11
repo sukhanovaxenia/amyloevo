@@ -19,6 +19,7 @@ include: "rules/common.smk"
 include: "rules/redundancy.smk"
 include: "rules/align.smk"
 include: "rules/predict.smk"
+include: "rules/group.smk"
 include: "rules/conserve.smk"
 include: "rules/phylo.smk"
 include: "rules/viz.smk"
@@ -32,6 +33,7 @@ rule all:
         expand("results/conserve/{protein}.tsv", protein=PROTEINS),
         "results/summary/conservation_summary.tsv",
         "results/summary/provenance.yaml",
+        *group_targets(),
         *phylo_targets(),
         *viz_targets(),
 

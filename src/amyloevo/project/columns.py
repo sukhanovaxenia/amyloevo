@@ -188,3 +188,89 @@ def index_alignment(sequences: dict[str, str]) -> AlignmentIndex:
     return AlignmentIndex(
         mappings={sid: build_mapping(sid, seq) for sid, seq in sequences.items()}
     )
+
+
+# --------------------------------------------------------------------------- #
+# Array projections
+#
+# The mapping classes above answer per-residue questions and are the right shape
+# for the conservation walk. The block and occupancy work needs whole arrays --
+# 372 sequences x 2,280 columns, read repeatedly -- so these return numpy arrays
+# built from the same rule. They are **0-based on the column axis**, unlike the
+# classes above, because they index arrays; the function names say so and the
+# boundary is crossed only here.
+# --------------------------------------------------------------------------- #
+def residue_to_column(aligned: str):
+    """0-based columns of each residue, in residue order.
+
+    ``out[i]`` is the column of the ``i``-th residue (0-based on both axes), so
+    ``len(out)`` is the ungapped length.
+    """
+    import numpy as np
+
+    return np.array(
+        [i for i, c in enumerate(aligned) if not is_gap(c)], dtype=int
+    )
+
+
+def column_to_residue(aligned: str):
+    """1-based residue number at each 0-based column, 0 where gapped.
+
+    Zero is the "no residue here" marker rather than -1 or nan, so the array
+    stays integer and a falsy test reads naturally. It does mean callers must
+    not treat 0 as a residue number -- there is no residue 0 in 1-based
+    numbering, which is why the convention is safe.
+    """
+    import numpy as np
+
+    out = np.zeros(len(aligned), dtype=int)
+    n = 0
+    for column, character in enumerate(aligned):
+        if not is_gap(character):
+            n += 1
+            out[column] = n
+    return out
+
+
+def project_mask(mask, aligned: str, n_columns: int):
+    """Lift a per-residue boolean mask into alignment columns.
+
+    Gap columns stay False for this sequence, which is the correct semantics
+    twice over: a sequence that lacks the residue cannot have an APR there, and
+    filling the interior gaps of a region would inflate it by other sequences'
+    insertions. Compare ``SequenceMapping.region_span``, which deliberately
+    does include them because a viewer highlight is a different question.
+
+    The mask and the sequence are allowed to disagree in length: only the
+    overlap is projected. A predictor run on a slightly different sequence
+    version is a real and recoverable situation, and truncating is better than
+    refusing the whole protein -- but it is also how a silent off-by-one hides,
+    so callers that can check the lengths should.
+    """
+    import numpy as np
+
+    out = np.zeros(n_columns, dtype=bool)
+    columns = residue_to_column(aligned)
+    usable = min(columns.size, len(mask))
+    if usable:
+        out[columns[:usable]] = np.asarray(mask, dtype=bool)[:usable]
+    return out
+
+
+def mask_from_regions(regions, length: int):
+    """Boolean per-residue mask from inclusive 1-based ``(start, end)`` regions.
+
+    Accepts tuples or any object with ``.start`` and ``.end``, so a consensus
+    region object from the predictor side needs no unpacking at the call site.
+    """
+    import numpy as np
+
+    mask = np.zeros(length, dtype=bool)
+    for region in regions:
+        start, end = (
+            (region.start, region.end)
+            if hasattr(region, "start")
+            else (region[0], region[1])
+        )
+        mask[max(int(start) - 1, 0) : min(int(end), length)] = True
+    return mask
