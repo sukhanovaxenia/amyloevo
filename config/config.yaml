@@ -50,6 +50,7 @@ align:
   tool: mafft               # mafft | muscle
   mafft_args: "--auto --anysymbol --quiet"
   muscle_args: ""
+  famsa_args: "-gt upgma"
 
 # --- Predictor panel --------------------------------------------------------
 # The LOCAL panel. Five of aggressor-wrappers' twelve predictors are web-only
@@ -57,7 +58,7 @@ align:
 # sequences. The reference sequence is scored by this same panel, as one member
 # of its own alignment -- never compared against a twelve-tool call.
 predict:
-  panel: [appnn, archcandy, crossbeta, tango, amylogram, amylodeep]
+  panel: [appnn, archcandy, crossbeta, foldamyloid, pasta2, aggreprot, tango, amyloid-predict, amylogram, amylodeep]
   aggressor_config: "config/aggressor.cfg"
   consensus: fractional_consensus
   apr_threshold: 0.5        # fraction of the panel calling a residue
@@ -202,6 +203,7 @@ viz:
 tools:
   mafft: mafft
   muscle: muscle
+  famsa: famsa
   mmseqs: mmseqs
   cdhit: cd-hit
   iqtree: iqtree2

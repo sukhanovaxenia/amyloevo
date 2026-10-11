@@ -70,10 +70,31 @@ rule align_muscle:
         "-threads {threads} {params.args} > {log} 2>&1"
 
 
+rule align_famsa:
+    input:
+        fasta=sequences_for_alignment,
+        reference="results/align/{protein}.reference.txt",
+    output:
+        "results/align/{protein}.aln",
+    params:
+        args=config["align"]["famsa_args"],
+        muscle=config["tools"]["famsa"],
+    threads: config["resources"]["align_threads"]
+    log:
+        "logs/align/{protein}.log",
+    conda:
+        "../envs/align.yaml"
+    shell:
+        "{params.muscle} -t {threads} -v {params.args} "
+        "{input.fasta} {output} > {log} 2>&1"
+
+
 if config["align"]["tool"] == "mafft":
-    ruleorder: align_mafft > align_muscle
+    ruleorder: align_mafft > align_muscle > align_famsa
+elif config["align"]["tool"] == "muscle":
+    ruleorder: align_muscle > align_mafft > align_famsa
 else:
-    ruleorder: align_muscle > align_mafft
+    ruleorder: align_famsa > align_muscle > align_mafft
 
 
 rule align_metadata:
