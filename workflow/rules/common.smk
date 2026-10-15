@@ -65,10 +65,18 @@ def apr_calls(wildcards):
 def phylo_targets():
     if config["phylo"]["tree"] == "none":
         return []
-    return [
-        "results/summary/phylo_signal.tsv",
-        *expand("results/phylo/{protein}.treefile", protein=PROTEINS),
-    ]
+    targets = [*expand("results/phylo/{protein}.treefile", protein=PROTEINS)]
+    # The phylogenetic test needs a ROOTED tree, and the root comes from the
+    # declared outgroup, which only exists alongside a paralogue split. With no
+    # references there is no outgroup to root on and no clade to contrast, so
+    # the tree is still built -- it is useful on its own -- and the test is not
+    # requested. Asking for it anyway would fail the run at the rooting step
+    # with an error about data when the cause is configuration.
+    if DO_PHYLO_TEST:
+        targets += expand(
+            "results/summary/{protein}.phylo_signal.tsv", protein=PROTEINS
+        )
+    return targets
 
 
 def viz_targets():
@@ -97,6 +105,11 @@ def ortholog_fasta(protein):
 #: for a set that really is one orthologue group.
 GROUP_REFERENCES = config["group"].get("references") or {}
 DO_ASSIGN = len(GROUP_REFERENCES) >= 2
+
+#: The phylogenetic test additionally needs an outgroup to root on. Both
+#: conditions are configuration, not data, so they are read here once rather
+#: than discovered by a rule failing halfway through a run.
+DO_PHYLO_TEST = DO_ASSIGN and bool(config["group"].get("outgroup"))
 
 
 def group_targets():

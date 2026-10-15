@@ -118,9 +118,56 @@ tree separates them.
 cannot be answered by correlation. Species share ancestry, so the observations
 are not independent and any clade-level pattern will appear significant.
 Phylogenetic signal in a binary trait: Fritz & Purvis's *D*, or Pagel's λ.
-The dependency itself: phylogenetic logistic regression (`phyloglm`). The
-species tree comes from NCBI taxonomy or EggNOG's own tree; a gene tree would be
-the stricter choice and is a later option, not the default.
+The dependency itself: phylogenetic logistic regression (`phyloglm`).
+
+**The tree is a gene tree, and that was a decision.** An earlier version of this
+section made the species tree the default and called a gene tree "the stricter
+choice, a later option". It is now the default, inferred from the family
+alignment itself, because on a paralogue family a species tree cannot hold the
+thing being measured: the FXR1 set has three sequences per taxon and a species
+tree has one tip per taxon, so the paralogues would have to be averaged away
+before the test that is supposed to distinguish them. What the gene tree costs
+is that the duplication is *inside* it, and three consequences follow, each now
+a check rather than an assumption:
+
+- **Monophyly is a property of the tree, not of the assignment.** `group.assign`
+  calls a sequence FXR1 by identity to a reference; whether the FXR1 sequences
+  form a clade is a separate claim that the tree either supports or refutes.
+  `phylo.clade_checks` makes it and names the intruders. A group that comes out
+  paraphyletic is a result — a misassignment, an incomplete lineage, or a
+  duplication history with more than one event — and it also rules out taking
+  that group's MRCA as its subtree, because the subtree holds other groups.
+- **Rooting is a declaration, checked.** The outgroup is the declared
+  pre-duplication set, for the reason already in this section: a low identity
+  margin means *ambiguous*, not *ancestral*. What `phylo.root_on_outgroup` adds
+  is the check that the declared outgroup is monophyletic on this tree; when it
+  is not, its MRCA contains ingroup tips and rooting there moves them across the
+  root. The default is to refuse rather than root anyway.
+- **The clade cannot be a regression predictor.** Each paralogue group descends
+  from one duplication, so a group contrast rests on two independent events
+  however many tips it spans. `phyloglm` would return a coefficient computed as
+  if all 282 tips were data — the same pseudoreplication this section exists to
+  prevent, one level up. The group term is therefore absent from the fit, and
+  the controlled instrument for the paralogue difference is the paired
+  within-taxon contrast over the taxa carrying all three copies.
+
+**Zero-length branches are where the trait has no history under it.** Identical
+aligned rows sit at the ends of branches of length zero, so a trait that differs
+between them changes with no branch length to attribute the change to.
+Deduplicating the alignment looks like the fix and is worse: it keeps one member
+and discards the others' traits. On the FXR1 trimmed alignment 33 groups of
+identical rows cover 90 of 372 sequences — only 7 of those groups are identical
+*before* trimming — and 11 contain members whose APR masks differ, by up to 84
+residues. So every sequence is kept, the tree program collapses them for the
+search and restores them in its output, and `phylo.trait_conflicts` measures how
+much trait variance ends up unattributable instead of deleting it.
+
+**A near-universal block cannot be tested, and that is not a threshold to
+tune.** *D* needs both states present in quantity. Two of the fifteen FXR1
+blocks are carried by 98.6% and 95.7% of sequences; there is no variation in
+them for the tree to explain, and lowering the prevalence gate would only
+replace a refusal with a number whose sampling variance covers the whole
+interpretable scale. `phylo.screen` declines them and says why.
 
 `phylo.signal` is the screen that comes before any of that: a PERMANOVA per rank
 on the APR profiles, run **inside** a paralogue group, because every mammal in a
@@ -176,7 +223,7 @@ exactly the contrast in §3.
 | `predict` | call `aggressor-wrappers` on every orthologue; consume its merged tables | aggressor-wrappers |
 | `conserve` | the three measures of §3 | none |
 | `stats` | multiple-comparison adjustment (BH, Holm) shared by every family of tests | none |
-| `phylo` | taxonomic signal screen (§4); later: species tree, phylogenetic regression | scipy; later R `phyloglm` / `caper` |
+| `phylo` | taxonomic signal screen, gene-tree rooting and clade checks, trait binarisation and its prevalence screen, the R bridge (§4) | scipy, biopython; R `caper` / `phytools` / `phylolm` |
 | `viz` | group-wise occupancy, block heatmap, paired load; later per-APR logos and MEME export | matplotlib; later logomaker / MEME |
 
 `predict` consumes `aggressor-wrappers`; it does not reimplement predictors.

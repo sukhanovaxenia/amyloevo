@@ -167,12 +167,63 @@ conserve:
 # clade correlation pseudoreplication.
 phylo:
   tree: infer               # infer | species | none
-  iqtree_args: "-m MFP -B 1000 --quiet"
+  # --alrt as well as -B. UFBoot and SH-aLRT are not on the same scale and are
+  # conventionally read together -- a clade is well supported at UFBoot >= 95 AND
+  # SH-aLRT >= 80 -- because either alone accepts clades the other rejects. On a
+  # paralogue family the contested nodes are exactly the short internal ones that
+  # decide whether a paralogue group is monophyletic, so both are needed.
+  iqtree_args: "-m MFP -B 1000 --alrt 1000 --quiet"
   # Binary-trait signal: fritz_purvis_d | pagel_lambda | both
   signal: both
   # Dependency of APR presence on divergence and clade
   regression: phyloglm
   species_tree: null        # a Newick file, when tree: species
+
+  # --- The gene tree, and the traits put on it ------------------------------
+  # `tree: infer` on a paralogue family gives a GENE tree: the duplication sits
+  # inside it. D and lambda over the whole tree then answer "does the trait
+  # follow the history of these genes, duplication included"; the per-paralogue
+  # question needs that clade's subtree, and whether the clade exists at all is
+  # a property of the tree rather than of the assignment. Both are reported.
+  #
+  # A tip whose aligned row is mostly gaps is placed by missing data: absent
+  # characters do not constrain the topology, so the tip lands wherever the
+  # remaining columns point and drags its neighbours' branch lengths with it.
+  # Dropped BEFORE inference -- pruning it from a finished tree does not undo
+  # that. On the FXR1 trimmed alignment 15 of 372 sequences fall below 0.5.
+  #
+  # Identical rows are NOT dropped. They give zero-length branches, which look
+  # like something to clean up and are not: IQ-TREE collapses them for the
+  # search and restores them in the output, whereas deduplicating picks one
+  # member as the representative and discards the others' traits. On that same
+  # alignment 11 of 33 identical-row groups hold members whose APR masks differ,
+  # by up to 84 residues.
+  min_tip_occupancy: 0.5
+  # The outgroup must be MONOPHYLETIC on the tree before it can root it. When it
+  # is not, its MRCA holds ingroup tips and rooting there moves them across the
+  # root. That disagreement between the declaration and the tree is a finding,
+  # not a detail to route around, so the default is to refuse.
+  require_outgroup_monophyly: true
+  # A block counts as PRESENT when a sequence covers more than this fraction of
+  # it. There is no natural cut in a coverage fraction, and this one moves the
+  # prevalence of every trait at once -- the quantity D is most sensitive to.
+  # Re-run at 0.4 and 0.6: a conclusion that does not survive is a conclusion
+  # about the threshold. On the FXR1 blocks 13 of 15 are testable at 0.5, 12 at
+  # 0.4, 13 at 0.6.
+  presence_threshold: 0.5
+  # D and phyloglm need both states present in quantity. The count and the
+  # fraction catch different designs: 10 of 12 tips passes the count and fails
+  # the fraction, 10 of 5,000 the reverse. The two FXR1 blocks that fail are the
+  # near-universal ones (98.6% and 95.7% prevalence) -- a block every sequence
+  # carries has no variation for the tree to explain, which is a limit of the
+  # question, not a fixable threshold.
+  min_minority: 10
+  min_prevalence: 0.05
+  # One test per block, per p-value column, each column its own family. Note
+  # that a permutation p cannot fall below 1/(permutations+1), and BH at this
+  # alpha over m blocks cannot reject anything unless some p reaches alpha/m --
+  # amyloevo.phylo.estimate.floor_warning checks it rather than trusting it.
+  alpha: 0.05
 
   # --- The taxonomic signal screen ------------------------------------------
   # PERMANOVA per rank on the block profiles, run WITHIN each paralogue group:
@@ -207,6 +258,7 @@ tools:
   mmseqs: mmseqs
   cdhit: cd-hit
   iqtree: iqtree2
+  rscript: Rscript
   aggressor: aggressor-wrappers
 
 resources:

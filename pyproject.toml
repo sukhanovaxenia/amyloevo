@@ -19,10 +19,19 @@ dependencies = ["pandas>=1.3", "numpy>=1.20"]
 
 [project.optional-dependencies]
 align = ["biopython>=1.80"]
-# scipy for the PERMANOVA screen (pdist, binomtest); dendropy/ete3 for the
-# tree-based tests that are still specified. The screen does not need a tree,
-# which is the point of it, so it is usable with scipy alone.
-phylo = ["scipy>=1.9", "dendropy>=4.5", "ete3>=3.1"]
+# scipy for the PERMANOVA screen (pdist, binomtest); biopython for Newick
+# parsing, MRCA, pruning and rerooting in `phylo.tree`. The screen does not need
+# a tree, which is the point of it, so it is usable with scipy alone.
+#
+# ete3 and dendropy are gone. The tree operations here -- read, reroot, MRCA,
+# monophyly, prune -- are ones Biopython already does, and ete3 pulls a GUI
+# stack for them. The ESTIMATORS are not Python at all: Fritz & Purvis D,
+# Pagel's lambda and the phylogenetic logistic regression run in R (caper,
+# phytools, phylolm) from workflow/scripts/phylo_signal.R, because there is no
+# Python implementation of D worth trusting and writing one to avoid a
+# dependency would put the least-tested code in the project at the point where
+# the conclusion is drawn.
+phylo = ["scipy>=1.9", "biopython>=1.80"]
 viz = ["matplotlib>=3.5", "logomaker>=0.8"]
 # scipy and matplotlib are in dev so the whole suite runs from `pip install
 # -e ".[dev]"`: without them tests/test_signal.py and tests/test_viz_groups.py

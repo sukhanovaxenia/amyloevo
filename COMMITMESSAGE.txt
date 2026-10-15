@@ -1,385 +1,78 @@
-feat(group,phylo): paralogue groups, taxonomy and the clade-signal screen
-
-Establishes paralogue groups before conservation is measured, resolves taxids to
-names and lineages, builds the APR-block features the clade tests need, and adds
-the distribution-free screen that decides whether building the species tree is
-worth the compute. Nothing here is specific to FXR1; FXR1 is the validation
-case, and the generalised code reproduces the FXR1-specific implementation
-exactly (see VALIDATION below).
-
-
-WHY GROUPING COMES FIRST
-
-An "orthologue set" pulled from EggNOG or STRING is routinely a paralogue
-family. The FXR1 set is 372 sequences described as FXR1 orthologues and is in
-fact the whole FMR1/FXR1/FXR2 family: 116 FXR1, 101 FMR1, 97 FXR2 and 58
-single-copy invertebrate genes, across 152 taxa of which 82 contribute exactly
-three sequences. FXR1 and FMR1 differ roughly twofold in APR load, which swamps
-anything within either group, so every statement of the form "conserved across
-orthologues" computed on the pooled set is a statement about a mixture.
-
-So the group is established from the data rather than from the set's name, and
-before any conservation measure runs.
-
-  src/amyloevo/group/paralogues.py   (new)
-
-    assign()          percent identity to caller-supplied references over the
-                      CORE COLUMNS -- the columns where every reference carries
-                      a residue. Restricting to the shared core is what makes
-                      the comparison symmetric: over all columns each sequence
-                      would be scored partly on which indels it shares with a
-                      reference, and the longest reference would win assignments
-                      by having more columns to agree on.
-
-                      Identity is computed where BOTH sequences have a residue,
-                      so a fragment is not penalised for the residues it lacks;
-                      how much of the core it covers is reported separately as
-                      core_coverage, which is what a completeness filter should
-                      use.
-
-    margin            best-vs-second identity, and the only honest confidence
-                      available. A sequence 48% identical to one reference and
-                      47% to another has not been assigned, it has been rounded.
-                      Default threshold 0.05.
-
-    outgroup=         sequences the caller DECLARES to sit outside the reference
-                      groups. Takes a set of ids or a predicate.
-
-                      This cannot be inferred, and the FXR1 set shows why: all
-                      58 invertebrate genes fall below the 0.05 margin -- every
-                      one, so a low margin is a perfectly sensitive screen -- but
-                      so do 20 vertebrate sequences that genuinely belong to a
-                      paralogue. Reading the flag as "outgroup" moves those 20
-                      out of the group they belong to. It means AMBIGUOUS.
-
-    copy_number()     sequences per taxon, and which taxa carry fewer than there
-                      are groups. Reported as an OBSERVATION. A deficient taxon
-                      may predate the duplication, may have lost a copy, or the
-                      set may be incomplete for it; those are different facts and
-                      only a tree separates them, so the word "pre-duplication"
-                      is deliberately absent from this module.
-
-Two or twelve groups work the same way. The references define the groups.
-
-
-TAXONOMY AND LABELS
-
-  src/amyloevo/io/taxonomy.py   (new)
-
-    TaxonomyDB.from_taxdump()   names.dmp / nodes.dmp / merged.dmp, in the
-                                format's own tab-pipe-tab delimiter, keeping
-                                only the scientific name where a taxid carries
-                                several.
-
-    merged.dmp is not optional. An orthologue set assembled a few years ago
-    carries taxids NCBI has since merged, and without it those lineages come
-    back empty -- which means their species leave the analysis WITHOUT appearing
-    in any denominator. A sweep can lose twenty species and still report clean
-    numbers. The workflow therefore writes the unresolved ids to a file the DAG
-    knows about rather than to a log line.
-
-    from_table()                fallback for a caller who already has a table.
-    An empty database is usable, not fatal: the pipeline still produces id-keyed
-    output. It IS a reason to refuse a clade-level test, which phylo.signal does.
-
-  src/amyloevo/io/annotate.py   (new)
-
-    The metadata table every downstream table and figure is keyed on: id,
-    protein, taxid, tax_name, the rank columns, group, protein_name, label.
-
-    On labelling, which is a choice and not a formatting detail:
-    9606.ENSP00000350170 is unique, stable and unreadable; "Homo sapiens FXR1"
-    is readable and not guaranteed unique. The policy is to label by meaning
-    (default template "{tax_name} {group}"), fall back down a chain so a partly
-    resolved set still labels, disambiguate collisions with the accession on
-    EVERY member of the colliding set -- a suffix on one row of a pair reads as a
-    correction to that row, on both it reads as a property of the pair, which is
-    what it is -- and keep id on the table, because label is for display and
-    joins go through id. The template is configurable: a figure of one species'
-    paralogues wants "{group}" alone, one group's orthologues wants "{tax_name}".
-
-
-FEATURES: APR BLOCKS
-
-  src/amyloevo/conserve/blocks.py   (new)
-
-The feature construction matters more than any test applied afterwards. A
-sequence's APR profile over a long alignment is sparse -- in the FXR1 family each
-protein covers 40-90 of the 623 columns ever covered -- so clustering or testing
-it directly measures mostly shared absence. Average-linkage clustering on the
-raw profile produces one cluster holding everything plus a few singletons, which
-is a chaining artefact wearing the costume of a result.
-
-Columns are therefore grouped into blocks and each sequence scored by the
-fraction of each block it covers, which is both more robust and directly
-interpretable: a cluster can be described by which blocks its members carry.
-
-Three decisions in here are load-bearing:
-
-  - Blocks are defined PER GROUP and then merged. The pooled definition finds
-    only what the majority carries, and a block present in a minority of one
-    group is exactly the discriminative feature a group contrast needs. The
-    threshold for DEFINING a block (0.35) is therefore lower than the one for
-    CALLING a conserved column (0.5), and they are separate parameters.
-
-  - Dips of up to max_gap columns are bridged, BEFORE the width filter. One
-    column below threshold inside a solid run is one indel in one sequence.
-    Splitting there leaves two sub-width fragments that are both then dropped,
-    so the block vanishes rather than merely shifting -- which is how a real
-    block came out five columns short while this was being written.
-
-  - Coverage is a FRACTION, matching occupancy(). The earlier signature took a
-    member count alongside a fractional threshold; a count on one side and a
-    fraction on the other silently passes every column, so the member count is
-    gone and a test pins the units.
-
-  src/amyloevo/project/columns.py   (extended)
-
-    residue_to_column(), column_to_residue(), project_mask(), mask_from_regions()
-
-    The array forms of the mapping the SequenceMapping classes already provide
-    per residue -- needed because the block work reads 372 x 2,280 repeatedly.
-    These are 0-based on the column axis where the classes are 1-based; the
-    names say so and the boundary is crossed in exactly one place.
-
-    project_mask leaves gap columns False, which is correct twice over: a
-    sequence that lacks the residue cannot have an APR there, and filling a
-    region's interior gaps would inflate it by other sequences' insertions.
-
-
-THE TAXONOMIC SIGNAL SCREEN
-
-  src/amyloevo/phylo/signal.py   (new)
-
-PERMANOVA (Anderson 2001) per taxonomic rank on the block profiles, with a
-label-permutation p-value, BH-adjusted across ranks.
-
-Run WITHIN a paralogue group. Paralogue identity and taxonomy are entangled in
-any pooled analysis: every mammal in a three-paralogue family contributes one of
-each, so "mammal" and "paralogue" explain the same variance and whichever is
-fitted first wins. The pooled test is reported only as the sanity check that the
-groups separate at all.
-
-This is a SCREEN and does not discharge rule phylogenetic_signal. A rank effect
-means profiles CLUSTER by clade, which nested sampling alone produces. Fritz &
-Purvis D, Pagel's lambda and phylogenetic logistic regression remain the
-stricter instruments the design calls for; the stub for them now says so
-explicitly, so the screen cannot quietly be read as the test.
-
-Two guards, both put there by wrong answers:
-
-  1. REPLICATION. Pseudo-F and R^2 rise mechanically as levels approach
-     singletons: with 56 families among 77 sequences, within-group scatter is
-     zero by construction and R^2 goes to 1 whatever the data say. A rank is
-     dropped unless enough of its levels are replicated, and the surviving level
-     and member counts are reported so a reader sees what was tested.
-
-  2. DEGENERATE PROFILES -- and this one corrects an earlier claim of mine.
-
-     I had attributed FXR2's R^2 = 0.989 / pseudo-F = 591 at order and family
-     level to singleton levels, and built guard (1) for it. Guard (1) does not
-     catch it and should not: FXR2 at order level has 7 orders over 48
-     sequences with no singletons at all, and passes every replication filter.
-
-     The real cause is that those 48 sequences carry only SEVEN DISTINCT BLOCK
-     PROFILES between them, and three orders (Cichliformes, Chiroptera,
-     Artiodactyla) are internally identical. Within-group scatter is 1% of the
-     total, so R^2 ~ 0.99 follows arithmetically. FXR1 over the same ranks has
-     13 distinct profiles among 58 sequences and gives R^2 = 0.658.
-
-     The permutation p is honest in both cases -- the labels really do predict
-     the profile -- so the row is reported rather than skipped, flagged, with
-     distinct_profiles and within_total beside it. What cannot be quoted is R^2
-     as an effect size. The report says so in those words: write "FXR2's APR
-     architecture takes only seven forms and they are clade-specific", not
-     "order explains 99% of the variance".
-
-     The flag keys on within-group scatter (< 5% of total), NOT on the count of
-     distinct profiles. Exact row-uniqueness is the intuitive measure and is
-     useless on continuous features: add a whisper of noise to a set of
-     identical profiles and every row becomes "distinct" while the scatter is
-     unchanged, so the count stops firing exactly where the pathology remains.
-     A test pins that.
-
-A non-finite profile row is also now blamed on the input by name, with the
-offending index, rather than surfacing as "degenerate design" -- both come back
-as nan and only one of them is the caller's data.
-
-
-MULTIPLE COMPARISONS
-
-  src/amyloevo/stats/multiple.py   (new)
-
-    benjamini_hochberg()   step-up FDR, validated against
-                           scipy.stats.false_discovery_control over 200 random
-                           families to 1e-12. Validated against the library
-                           rather than against values quoted from memory,
-                           because a hand-copied expected column is as likely to
-                           be wrong as the code it checks -- and was.
-
-    holm()                 step-down FWER, for the smaller families where
-                           controlling the family-wise rate is the right choice.
-
-    n_discoveries()
-
-NaNs pass through without entering the denominator. A test that could not be
-run is not a test that failed to reject, and counting it in m penalises every
-other test in the family for a comparison that never happened -- e.g. a rank
-skipped for having no replicated levels.
-
-This lives in its own module because the same family of tests is built in
-several places (one per protein, one per rank, one per domain), and an
-adjustment implemented twice is an adjustment applied inconsistently.
-
-What the adjustment is for, concretely: on the FXR1 termini analysis the
-direction is unanimous -- 91 of 91 proteins, sign test p = 8e-28 -- while NO
-single protein is significant at FDR 0.05, because each carries about four APRs
-and the smallest attainable p sits above the threshold. Those answer different
-questions and both belong in a report. An unadjusted per-protein table answers
-neither.
-
-
-FIGURES
-
-  src/amyloevo/viz/groups.py   (new)
-
-    plot_occupancy_profiles()  per-group occupancy along the reference, one
-                               facet per group. Faceted rather than overlaid
-                               because identity by facet survives greyscale
-                               printing and colour-vision deficiency, and
-                               because overlaid curves for four groups are
-                               unreadable wherever they agree -- which is the
-                               part that matters.
-
-    plot_block_occupancy()     group x block heatmap, annotated. A missing
-                               occupancy is left blank, not drawn as zero: an
-                               unscored block and an empty block are different
-                               claims.
-
-    plot_group_load()          paired within-taxon load as a slopegraph rather
-                               than box plots. The comparison is WITHIN a
-                               genome, which is what removes the between-species
-                               component, and a box plot throws away the pairing
-                               that makes it a controlled contrast.
-
-Figure height never scales with the number of sequences. A per-sequence figure
-over an orthologue sweep is how a plotting routine produces an image no viewer
-will open; these summarise by group and the per-sequence view is a paginated
-table. A test pins it.
-
-Colours are assigned in fixed order so a group keeps its colour when another is
-filtered out -- otherwise two figures in one paper disagree about which series
-is FXR1.
-
-
-PACKAGE SURFACE
-
-  src/amyloevo/{io,phylo,stats,viz}/__init__.py   exports and the module-level
-                                                  docstrings; io, phylo and viz
-                                                  were empty files
-  src/amyloevo/conserve/__init__.py               now exports scores AND blocks
-  src/amyloevo/project/__init__.py                exports the array projections
-
-Each __all__ is asserted to resolve, so an export that names something the
-module does not define fails at import rather than at the call site.
-
-
-WORKFLOW
-
-  workflow/rules/group.smk        (new)  taxonomy_table, assign_groups,
-                                         block_profiles, taxonomic_signal,
-                                         group_figures
-  workflow/scripts/annotate_metadata.py  (new)
-  workflow/scripts/assign_groups.py      (new)
-  workflow/scripts/block_profiles.py     (new)
-  workflow/scripts/taxonomic_signal.py   (new)
-  workflow/scripts/group_figures.py      (new)
-  workflow/rules/common.smk       group_targets(), ortholog_fasta(), DO_ASSIGN
-  workflow/Snakefile              includes group.smk, adds the targets
-  workflow/scripts/phylo_signal.py  stub docstring now states that the screen
-                                    does NOT discharge it
-  config/config.yaml              taxonomy, label, group, blocks sections, and
-                                  phylo.permutations / seed / min_*
-
-Rules stay thin: read inputs, call one library function, write outputs. Metadata
-is read from the headers of the FULL orthologue set, not of the clustered
-representatives -- a species dropped by clustering still has a taxon, and losing
-it from the metadata would quietly shrink every rank-wise denominator.
-
-With group.references unset, assign_groups writes an empty table with the right
-columns and says why. That is correct for a set that really is one orthologue
-group, and it keeps the DAG and every downstream join intact.
-
-The paired-load figure needs taxa carrying every group and there may be none. It
-then writes a figure stating that, rather than failing the DAG or silently
-plotting an empty axis, and does not substitute the unpaired comparison.
-
-
-VALIDATION AGAINST THE FXR1 RESULTS
-
-The generalised code was run against the FXR1 sweep and compared with the
-FXR1-specific implementation it replaces:
-
-  identities (all three references)   max |diff| = 1.1e-16
-  best_identity, margin, coverage     max |diff| = 1.1e-16
-  paralogue calls                     372 / 372 identical
-  APR blocks                          15 / 15 identical, same labels
-  per-sequence block profiles         max |diff| = 5.6e-17  (282 x 15)
-  PERMANOVA (F, R^2, p)               8 / 8 rows identical, same seed and draws
-
-Independently, the 372 group calls also match the gene-name column of the
-original EggNOG-derived table at 100% -- two methods built from different code
-agreeing on every sequence.
-
-Three numbers in the FXR1 write-up need correcting as a result, all of them
-mine:
-
-  - "a quarter of the set sits close to a tie" was 78/372 = 21%, counting the
-    58 outgroup sequences, which are near-tied for a structural reason rather
-    than a measurement one. Among genuinely assigned sequences it is 20/314 =
-    6.4%.
-  - 32 vertebrate sequences below the margin threshold was computed from the
-    input table's own identity column, not from this one. With these identities
-    it is 20.
-  - FXR2's R^2 = 0.99 is profile degeneracy, not a taxonomy effect. See above.
-
-
-ALSO
-
-  pyproject.toml   scipy added to the phylo extra (the screen needs pdist and
-                   binomtest, not a tree -- which is the point of it) and both
-                   scipy and matplotlib to dev, so `pip install -e ".[dev]"`
-                   runs the whole suite. Without them test_signal.py and
-                   test_viz_groups.py skip, and a suite that silently skips the
-                   modules under review is worse than one that fails.
-
-  README.md        module table, the two inputs worth configuring first
-                   (taxonomy.taxdump and group.references), and the labelling
-                   note.
-
-
-NOT VERIFIED HERE
-
-`snakemake --lint` and `--dryrun` have not been run: the new rules are checked
-structurally (every rule declares output and script, all 31 config references
-resolve, the helpers exist and the Snakefile includes and calls them) but the
-DAG itself has not been built. Worth one dry run before the first real one.
-
-
-TESTS
-
-  tests/test_paralogues.py    21  assignment, margin, outgroup, copy number
-  tests/test_annotate.py      18  taxdump parsing, merged ids, label policy
-  tests/test_signal.py        24  PERMANOVA, both guards, the rank sweep
-  tests/test_multiple.py      14  BH vs scipy, Holm, the realistic family shape
-  tests/test_blocks.py        28  definition, bridging, the feature matrix
-  tests/test_viz_groups.py    12  facets, fixed size, labelling
-  tests/test_projection.py    +11 array projections and the gap semantics
-
-183 tests pass.
-
-Several assertions in here were wrong before the code was, and were corrected
-rather than loosened: a "tied" sequence that was 0.0625 apart rather than equal,
-a title read from the centre slot when it is set left, a distinct-profile bound
-that counted jitter as variety, and a block construction with no within-group
-scatter that was not being tested at all.
+feat(phylo): the gene-tree step -- rooting, traits, and the R estimators
+
+Replaces the `phylo_signal.py` stub with the step it described. The design
+called a gene tree "a later option, not the default"; it is now the default,
+because a species tree has one tip per taxon and this family has three, so the
+paralogues would have to be averaged away before the test meant to distinguish
+them.
+
+Three new modules, each holding the part that is worth unit-testing:
+
+* `phylo.tree` -- read a treefile, root it on a declared outgroup, reconcile
+  tips with traits, check each paralogue group for monophyly, and find the
+  identical tips whose traits disagree.
+* `phylo.traits` -- block occupancy to a binary presence call at one named
+  threshold, with the prevalence screen D and phyloglm need.
+* `phylo.estimate` -- assemble the R call, and adjust the p-values that come
+  back.
+
+The estimators themselves are in `workflow/scripts/phylo_signal.R`: Fritz &
+Purvis D from caper, Pagel's lambda from phytools, phylogenetic logistic
+regression from phylolm. There is no Python implementation of D worth trusting,
+and writing one to avoid a dependency would put the least-tested code in the
+project at the point where the conclusion is drawn.
+
+Four refusals, each put there by something that would otherwise have produced a
+well-formed wrong answer:
+
+* Biopython roots AT the outgroup MRCA, which leaves a root of degree three.
+  `ape::is.rooted` is FALSE for that, and phyloglm -- which builds its
+  covariance from root-to-tip paths -- refuses the tree. The rooting would have
+  been performed, reported as successful, and rejected downstream. The root is
+  now bifurcated with a zero-length node, and the analysis rooting is done in R
+  with `ape::root(resolve.root = TRUE)`, which puts the root on the stem.
+* A paraphyletic outgroup is refused rather than rooted through. Its MRCA holds
+  ingroup tips, so rooting there moves them across the root -- and the
+  disagreement between the declaration and the tree is a finding, not a detail
+  to route around.
+* An outgroup made of two children of an unrooted trifurcation has the root as
+  its MRCA. An MRCA-only monophyly check calls that paraphyletic; it is not, and
+  the complement is checked too. IQ-TREE writes exactly this shape.
+* The alignment is NOT deduplicated. Identical rows give zero-length branches,
+  which look like something to clean up and are not: IQ-TREE collapses them for
+  the search and restores them, whereas deduplicating keeps one member and
+  discards the others' traits. On the FXR1 trimmed alignment 33 groups of
+  identical rows cover 90 of 372 sequences -- only 7 of them identical before
+  trimming -- and 11 hold members whose APR masks differ, by up to 84 residues.
+  `trait_conflicts` measures that instead of deleting it.
+
+Two things the step deliberately does not do. The paralogue group is not a
+regression predictor: each group descends from one duplication, so a group
+contrast rests on two independent events however many tips it spans, and
+phyloglm would compute a coefficient as if all 282 were data -- the same
+pseudoreplication §4 exists to prevent, one level up. The controlled instrument
+is the paired within-taxon contrast. And the permutation floor is checked rather
+than trusted: a permutation p cannot fall below 1/(k+1), BH at alpha over m
+blocks cannot reject unless some p reaches alpha/m, and this project has already
+shipped a table of all-null results produced by exactly that arithmetic going
+unchecked.
+
+Also: a mostly-gap tip is dropped BEFORE inference, in `rule tree_input`, since
+absent characters do not constrain the topology and pruning the tip from a
+finished tree does not undo its effect on the neighbours' branch lengths. 15 of
+372 FXR1 sequences fall below 0.5 occupancy.
+
+`phylo_targets` asked for `results/summary/phylo_signal.tsv`, which no rule
+produced; it is now per-protein and gated on a paralogue split and an outgroup
+both being configured.
+
+ete3 and dendropy are dropped from the phylo extra in favour of biopython:
+read, reroot, MRCA, monophyly and prune are operations Biopython already has,
+and ete3 pulls a GUI stack for them.
+
+21 new tests (248 passing in all). Verified on the FXR1 data through to the R
+boundary: 15 tips below occupancy, 57 of 58 outgroup tips surviving the filter,
+13 of 15 blocks testable at threshold 0.5 (12 at 0.4, 13 at 0.6), the two
+refusals being the near-universal blocks at 98.6% and 95.7% prevalence -- no
+variation there for a tree to explain, which is a limit of the question rather
+than a threshold to tune.
