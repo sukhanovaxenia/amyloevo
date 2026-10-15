@@ -189,26 +189,38 @@ def format_phylo_report(
         f"  {'block':16s} {'n':>5s} {'pres':>5s} {'D':>7s} {'p(rnd)':>8s} "
         f"{'p(BM)':>8s} {'lambda':>7s} {'p':>8s}"
     )
-    for row in table.itertuples(index=False):
-        def num(attr, fmt, _row=row):
-            value = getattr(_row, attr, float("nan"))
-            try:
-                value = float(value)
-            except (TypeError, ValueError):
-                value = float("nan")
-            width = fmt.split(".")[0] or "7"
-            return format(value, fmt) if np.isfinite(value) else f"{'--':>{width}}"
+    # Rows as dicts, not itertuples. `itertuples` renames any column that is not
+    # a valid Python identifier -- `lambda` is a keyword, so `row.lambda` cannot
+    # exist and a getattr fallback silently printed a dash in every row of the
+    # lambda column. A report that blanks a whole statistic without erroring is
+    # the worst available failure, so the lookup no longer goes through
+    # attributes at all.
+    records = table.to_dict("records")
+
+    def num(record, key, fmt, *, alt=None):
+        value = record.get(key, record.get(alt) if alt else None)
+        try:
+            value = float(value)
+        except (TypeError, ValueError):
+            value = float("nan")
+        width = fmt.split(".")[0] or "7"
+        return format(value, fmt) if np.isfinite(value) else f"{'--':>{width}}"
+
+    for record in records:
         lines.append(
-            f"  {str(row.block):16s} {int(row.n):5d} {int(row.n_present):5d} "
-            f"{num('d_estimate', '7.3f')} {num('d_p_random', '8.3g')} "
-            f"{num('d_p_brownian', '8.3g')} {num('lambda', '7.3f')} "
-            f"{num('lambda_p', '8.3g')}"
+            f"  {str(record.get('block', '?')):16s} "
+            f"{int(record.get('n') or 0):5d} {int(record.get('n_present') or 0):5d} "
+            f"{num(record, 'd_estimate', '7.3f')} "
+            f"{num(record, 'd_p_random', '8.3g')} "
+            f"{num(record, 'd_p_brownian', '8.3g')} "
+            f"{num(record, 'pagel_lambda', '7.3f', alt='lambda')} "
+            f"{num(record, 'lambda_p', '8.3g')}"
         )
     notes = []
-    for row in table.itertuples(index=False):
-        note = getattr(row, "note", "")
+    for record in records:
+        note = record.get("note", "")
         if isinstance(note, str) and note.strip():
-            notes.append((str(row.block), note.strip()))
+            notes.append((str(record.get("block", "?")), note.strip()))
     if notes:
         lines += ["", "estimator notes:"]
         lines += [f"    {b}: {n}" for b, n in notes]

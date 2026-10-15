@@ -130,11 +130,27 @@ def test_the_report_says_so_when_nothing_was_tested():
 
 def test_the_report_prints_dashes_not_nan_for_a_declined_estimator():
     table = _table(d_estimate=[np.nan], d_p_random=[np.nan],
-                   d_p_brownian=[np.nan], lambda_p=[np.nan])
-    table["lambda"] = [np.nan]
+                   d_p_brownian=[np.nan], lambda_p=[np.nan],
+                   pagel_lambda=[np.nan])
     text = estimate.format_phylo_report(table)
     assert "nan" not in text
     assert "--" in text
+
+
+def test_the_report_actually_prints_the_lambda_it_was_given():
+    """The first version read every column off itertuples, which renames any
+    column that is not a valid identifier. `lambda` is a Python keyword, so the
+    whole lambda column printed as a dash in every row and nothing errored."""
+    text = estimate.format_phylo_report(_table(pagel_lambda=[0.734]))
+    assert "0.734" in text
+
+
+def test_a_column_still_called_lambda_is_read_too():
+    """R could be changed back, or an older table re-read. Falling back on the
+    bare name costs one argument and removes a silent blanking."""
+    table = _table(d_estimate=[0.4])
+    table["lambda"] = [0.521]
+    assert "0.521" in estimate.format_phylo_report(table)
 
 
 def test_the_report_relays_estimator_notes():

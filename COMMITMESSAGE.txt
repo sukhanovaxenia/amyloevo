@@ -1,78 +1,27 @@
-feat(phylo): the gene-tree step -- rooting, traits, and the R estimators
+fix(phylo): the lambda column printed a dash in every row
 
-Replaces the `phylo_signal.py` stub with the step it described. The design
-called a gene tree "a later option, not the default"; it is now the default,
-because a species tree has one tip per taxon and this family has three, so the
-paralogues would have to be averaged away before the test meant to distinguish
-them.
+`format_phylo_report` read each value off `DataFrame.itertuples`, which renames
+any column that is not a valid Python identifier. `lambda` is a keyword, so
+`row.lambda` can never exist, the `getattr` fallback returned nan, and the whole
+Pagel's-lambda column rendered as `--` for every block. Nothing errored: the
+report was well formed and silently missing one of the two statistics the step
+exists to produce. Found by running the step against a stand-in for Rscript and
+looking at the output, not by reading the code.
 
-Three new modules, each holding the part that is worth unit-testing:
+Two changes, because either alone would leave the trap in place:
 
-* `phylo.tree` -- read a treefile, root it on a declared outgroup, reconcile
-  tips with traits, check each paralogue group for monophyly, and find the
-  identical tips whose traits disagree.
-* `phylo.traits` -- block occupancy to a binary presence call at one named
-  threshold, with the prevalence screen D and phyloglm need.
-* `phylo.estimate` -- assemble the R call, and adjust the p-values that come
-  back.
+* the report reads rows as dicts, so no column name can be mangled on the way
+  in, and it falls back to the bare name as well;
+* the R script now writes `pagel_lambda`, with a comment saying why it is not
+  called `lambda`.
 
-The estimators themselves are in `workflow/scripts/phylo_signal.R`: Fritz &
-Purvis D from caper, Pagel's lambda from phytools, phylogenetic logistic
-regression from phylolm. There is no Python implementation of D worth trusting,
-and writing one to avoid a dependency would put the least-tested code in the
-project at the point where the conclusion is drawn.
+Also corrects the paired-contrast count in the R script's comment on why the
+clade is not a regression predictor: the paired within-taxon contrast runs over
+55 taxa, not 82. 87 of 104 taxa carry all three paralogues, the completeness
+filter leaves 55, and the 82 in DESIGN.md section 4 is a third quantity --
+sequences per taxon over all 372, invertebrates included. Three counts, one of
+which is the sample size of the test offered as the honest alternative to
+phyloglm, so it is worth having right.
 
-Four refusals, each put there by something that would otherwise have produced a
-well-formed wrong answer:
-
-* Biopython roots AT the outgroup MRCA, which leaves a root of degree three.
-  `ape::is.rooted` is FALSE for that, and phyloglm -- which builds its
-  covariance from root-to-tip paths -- refuses the tree. The rooting would have
-  been performed, reported as successful, and rejected downstream. The root is
-  now bifurcated with a zero-length node, and the analysis rooting is done in R
-  with `ape::root(resolve.root = TRUE)`, which puts the root on the stem.
-* A paraphyletic outgroup is refused rather than rooted through. Its MRCA holds
-  ingroup tips, so rooting there moves them across the root -- and the
-  disagreement between the declaration and the tree is a finding, not a detail
-  to route around.
-* An outgroup made of two children of an unrooted trifurcation has the root as
-  its MRCA. An MRCA-only monophyly check calls that paraphyletic; it is not, and
-  the complement is checked too. IQ-TREE writes exactly this shape.
-* The alignment is NOT deduplicated. Identical rows give zero-length branches,
-  which look like something to clean up and are not: IQ-TREE collapses them for
-  the search and restores them, whereas deduplicating keeps one member and
-  discards the others' traits. On the FXR1 trimmed alignment 33 groups of
-  identical rows cover 90 of 372 sequences -- only 7 of them identical before
-  trimming -- and 11 hold members whose APR masks differ, by up to 84 residues.
-  `trait_conflicts` measures that instead of deleting it.
-
-Two things the step deliberately does not do. The paralogue group is not a
-regression predictor: each group descends from one duplication, so a group
-contrast rests on two independent events however many tips it spans, and
-phyloglm would compute a coefficient as if all 282 were data -- the same
-pseudoreplication §4 exists to prevent, one level up. The controlled instrument
-is the paired within-taxon contrast. And the permutation floor is checked rather
-than trusted: a permutation p cannot fall below 1/(k+1), BH at alpha over m
-blocks cannot reject unless some p reaches alpha/m, and this project has already
-shipped a table of all-null results produced by exactly that arithmetic going
-unchecked.
-
-Also: a mostly-gap tip is dropped BEFORE inference, in `rule tree_input`, since
-absent characters do not constrain the topology and pruning the tip from a
-finished tree does not undo its effect on the neighbours' branch lengths. 15 of
-372 FXR1 sequences fall below 0.5 occupancy.
-
-`phylo_targets` asked for `results/summary/phylo_signal.tsv`, which no rule
-produced; it is now per-protein and gated on a paralogue split and an outgroup
-both being configured.
-
-ete3 and dendropy are dropped from the phylo extra in favour of biopython:
-read, reroot, MRCA, monophyly and prune are operations Biopython already has,
-and ete3 pulls a GUI stack for them.
-
-21 new tests (248 passing in all). Verified on the FXR1 data through to the R
-boundary: 15 tips below occupancy, 57 of 58 outgroup tips surviving the filter,
-13 of 15 blocks testable at threshold 0.5 (12 at 0.4, 13 at 0.6), the two
-refusals being the near-universal blocks at 98.6% and 95.7% prevalence -- no
-variation there for a tree to explain, which is a limit of the question rather
-than a threshold to tune.
+250 tests passing. The new ones pin that a lambda value given to the report
+appears in it, under either column name.

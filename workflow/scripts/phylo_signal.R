@@ -107,7 +107,7 @@ for (blk in blocks) {
   row <- list(
     block = blk, n = nrow(frame), n_present = sum(frame$presence),
     d_estimate = NA_real_, d_p_random = NA_real_, d_p_brownian = NA_real_,
-    lambda = NA_real_, lambda_p = NA_real_,
+    pagel_lambda = NA_real_, lambda_p = NA_real_,
     glm_term = NA_character_, glm_estimate = NA_real_, glm_p = NA_real_,
     glm_alpha = NA_real_, note = ""
   )
@@ -136,6 +136,10 @@ for (blk in blocks) {
   }
 
   # --- Pagel's lambda on the continuous occupancy -------------------------
+  # The column is `pagel_lambda`, not `lambda`: on the Python side a column
+  # named `lambda` cannot be reached as an attribute (it is a keyword), and
+  # the first version of the report printed a dash for every row of it
+  # without erroring.
   # On the occupancy fraction, not on the binarised column: lambda is defined
   # for a continuous character, and fitting it to 0/1 asks a Brownian model to
   # describe a two-point distribution. Branch lengths here are substitutions
@@ -151,7 +155,7 @@ for (blk in blocks) {
       notes <- c(notes, paste0("phylosig failed: ",
                                trimws(as.character(attr(lam, "condition")$message))))
     } else {
-      row$lambda <- as.numeric(lam$lambda)
+      row$pagel_lambda <- as.numeric(lam$lambda)
       row$lambda_p <- as.numeric(lam$P)
     }
   }
@@ -167,7 +171,8 @@ for (blk in blocks) {
   # it spans. phyloglm would return a coefficient and a p-value computed as if
   # there were 372. The controlled instrument for the paralogue difference is
   # the paired within-taxon contrast over taxa that carry all three copies --
-  # 82 of them here -- and that is a paired test, not a regression.
+  # 55 of them here, once the completeness filter is applied; 87 of 104 taxa
+  # carry all three before it -- and that is a paired test, not a regression.
   if (regression == "phyloglm" && any(is.finite(frame$length))) {
     sub <- frame[is.finite(frame$length) & frame$id %in% phy$tip.label, ]
     if (length(unique(sub$presence)) < 2) {
