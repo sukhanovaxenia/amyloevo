@@ -32,9 +32,13 @@ least-tested code in the project at the point where the conclusion is drawn.
 """
 
 from .estimate import (
+    LAMBDA_CEILING,
     P_COLUMNS,
+    P_UNDERFLOW,
     Q_FOR_P,
+    TIE_DIGITS,
     adjust,
+    boundary_warnings,
     floor_warning,
     format_phylo_report,
     run_estimators,
@@ -52,15 +56,19 @@ from .signal import (
     taxonomic_signal,
 )
 from .traits import (
+    MIN_CLADE,
     MIN_MINORITY,
     MIN_PREVALENCE,
     PRESENCE_THRESHOLD,
+    WHOLE_TREE,
     TraitCheck,
     binarise,
     continuous,
     covariates,
     format_trait_report,
     screen,
+    screen_by_clade,
+    tasks,
     usable,
 )
 from .tree import (
@@ -90,9 +98,13 @@ from .tree import (
 
 __all__ = [
     # estimate
+    "LAMBDA_CEILING",
     "P_COLUMNS",
+    "P_UNDERFLOW",
     "Q_FOR_P",
+    "TIE_DIGITS",
     "adjust",
+    "boundary_warnings",
     "floor_warning",
     "format_phylo_report",
     "run_estimators",
@@ -131,14 +143,18 @@ __all__ = [
     "trait_conflicts",
     "write_tree",
     # traits
+    "MIN_CLADE",
     "MIN_MINORITY",
     "MIN_PREVALENCE",
     "PRESENCE_THRESHOLD",
+    "WHOLE_TREE",
     "TraitCheck",
     "binarise",
     "continuous",
     "covariates",
     "format_trait_report",
     "screen",
+    "screen_by_clade",
+    "tasks",
     "usable",
 ]

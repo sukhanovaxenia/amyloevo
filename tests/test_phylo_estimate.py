@@ -189,9 +189,124 @@ def test_the_report_includes_the_tree_diagnostics_it_is_given():
 
 def test_run_estimators_says_which_binary_is_missing(tmp_path):
     traits = pd.DataFrame({"blk": [1, 0]}, index=pd.Index(["a", "b"], name="id"))
+    work = pd.DataFrame({"scope": ["all"], "block": ["blk"]})
     with pytest.raises(FileNotFoundError, match="not on PATH"):
         estimate.run_estimators(
-            tmp_path / "t.nwk", traits, traits, ["a"],
+            tmp_path / "t.nwk", traits, traits, ["a"], tasks=work,
             r_script=tmp_path / "x.R", workdir=tmp_path / "w",
             rscript="definitely-not-a-real-rscript",
         )
+
+
+# --- scopes ----------------------------------------------------------------
+
+
+def _scoped(**columns):
+    n = len(next(iter(columns.values())))
+    base = {
+        "scope": ["all"] * (n // 2) + ["FXR1"] * (n - n // 2),
+        "block": [f"blk{i}" for i in range(n)],
+        "n": [100] * n,
+        "n_present": [50] * n,
+    }
+    return pd.DataFrame({**base, **columns})
+
+
+def test_each_scope_is_its_own_family():
+    """Whole-tree and per-clade rows are different questions asked of different
+    tips. Pooling them would inflate m for no gain in error control.
+
+    The two small p-values sit in one scope and the two large ones in the other,
+    because BH's step-up monotonicity hides a change in m whenever the smallest
+    p-values are tied across the scopes.
+    """
+    def table(**kwargs):
+        return pd.DataFrame({
+            "scope": ["all", "all", "FXR1", "FXR1"],
+            "block": ["b1", "b2", "b1", "b2"],
+            "n": [100] * 4, "n_present": [50] * 4,
+            "d_p_random": [0.001, 0.002, 0.5, 0.9],
+        })
+    per_scope = estimate.adjust(table())
+    pooled = estimate.adjust(table(), by=None)
+    # m = 2 inside the "all" scope; m = 4 over the whole table
+    assert per_scope["d_q_random"].min() == pytest.approx(0.002)
+    assert pooled["d_q_random"].min() == pytest.approx(0.004)
+
+
+def test_the_report_labels_each_scope():
+    text = estimate.format_phylo_report(_scoped(d_estimate=[0.1, 0.2, 0.3, 0.4]))
+    assert "whole tree" in text
+    assert "within FXR1" in text
+    assert "per-clade rows are where the answer is" in text
+
+
+def test_a_note_carries_its_scope_when_there_is_more_than_one():
+    table = _scoped(d_estimate=[0.1, 0.2, 0.3, 0.4])
+    table["note"] = ["", "", "phylo.d failed: x", ""]
+    text = estimate.format_phylo_report(table)
+    assert "[FXR1]" in text
+
+
+# --- boundaries ------------------------------------------------------------
+
+
+def test_lambda_at_the_ceiling_is_flagged():
+    warnings = estimate.boundary_warnings(_table(pagel_lambda=[0.9999, 0.5]))
+    assert any("top of its scale" in w for w in warnings)
+
+
+def test_lambda_tied_to_many_digits_is_called_a_bound_not_a_measurement():
+    """Five FXR1 blocks came back at 0.999926686256414 -- twelve identical
+    digits across independent fits is the optimiser, not the data."""
+    tied = [0.999926686256414] * 5 + [0.74]
+    warnings = estimate.boundary_warnings(_table(pagel_lambda=tied))
+    assert any("5 row(s) share a lambda" in w for w in warnings)
+
+
+def test_distinct_lambdas_are_not_flagged_as_tied():
+    warnings = estimate.boundary_warnings(_table(pagel_lambda=[0.1, 0.2, 0.3]))
+    assert not any("share a lambda" in w for w in warnings)
+
+
+def test_alphawarn_is_preferred_over_guessing_from_ties():
+    table = _table(glm_alpha=[1.5, 1.5, 1.5], glm_alpha_bound=[2, 2, 2])
+    warnings = estimate.boundary_warnings(table)
+    assert any("alphaWarn" in w and "search bound" in w for w in warnings)
+    assert not any("share alpha" in w for w in warnings)
+
+
+def test_tied_alpha_is_flagged_when_alphawarn_is_absent():
+    warnings = estimate.boundary_warnings(_table(glm_alpha=[1.51447] * 4))
+    assert any("share alpha" in w for w in warnings)
+
+
+def test_underflowed_p_values_are_flagged_and_not_printed_as_numbers():
+    table = _table(pagel_lambda=[0.9], lambda_p=[0.0])
+    assert any("below 1e-300" in w for w in estimate.boundary_warnings(table))
+    text = estimate.format_phylo_report(table)
+    assert "<1e-300" in text
+    assert " 0.0" not in text.split("Reading this table")[0]
+
+
+def test_a_denormal_p_is_treated_the_same_as_zero():
+    text = estimate.format_phylo_report(_table(lambda_p=[7.158e-320]))
+    assert "<1e-300" in text
+    assert "e-320" not in text
+
+
+def test_an_ordinary_small_p_is_still_printed():
+    text = estimate.format_phylo_report(_table(lambda_p=[1e-20]))
+    assert "1e-20" in text
+    assert "<1e-300" not in text
+
+
+def test_boundary_warnings_appear_in_the_report():
+    table = _table(pagel_lambda=[0.9999, 0.9999], lambda_p=[0.01, 0.02])
+    text = estimate.format_phylo_report(table)
+    assert "!!" in text
+    assert "top of its scale" in text
+
+
+def test_boundary_warnings_on_an_empty_table_say_nothing():
+    assert estimate.boundary_warnings(pd.DataFrame()) == []

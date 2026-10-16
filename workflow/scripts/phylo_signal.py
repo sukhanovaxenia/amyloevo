@@ -91,7 +91,7 @@ def main() -> None:
             f"the tree disagrees with it and that disagreement is the result.\n"
             f"Set phylo.require_outgroup_monophyly to false to root anyway.\n"
         )
-        pd.DataFrame(columns=["block"]).to_csv(out_table, sep="\t", index=False)
+        pd.DataFrame(columns=["scope", "block"]).to_csv(out_table, sep="\t", index=False)
         raise SystemExit(f"outgroup rooting refused: {rooting.refused}")
     rooted = rooting.tree
 
@@ -111,19 +111,26 @@ def main() -> None:
         out_report.write_text(
             f"PHYLOGENETIC SIGNAL -- not run.\n\n{reconciliation}\n"
         )
-        pd.DataFrame(columns=["block"]).to_csv(out_table, sep="\t", index=False)
+        pd.DataFrame(columns=["scope", "block"]).to_csv(out_table, sep="\t", index=False)
         raise SystemExit("fewer than three sequences have both a tip and a trait")
     binary = binary.loc[shared]
     occupancy = occupancy.loc[shared]
 
     conflicts = T.trait_conflicts(T.identical_groups(alignment), binary)
 
-    checks = tr.screen(
+    # Screened over the whole tree AND inside each clade. On a gene tree of a
+    # paralogue family the whole-tree answer is close to foreordained -- the
+    # deepest split is the duplication and the groups carry different profiles,
+    # so "does this trait follow this tree" has to come back yes, at p-values
+    # below what a double can hold. The per-clade rows are where it does not.
+    checks = tr.screen_by_clade(
         binary,
+        group_of,
         min_minority=params.min_minority,
         min_prevalence=params.min_prevalence,
     )
-    testable = tr.usable(checks)
+    work = tr.tasks(checks)
+    testable = sorted(set(work["block"])) if len(work) else []
     trait_report = tr.format_trait_report(
         checks, threshold=params.presence_threshold,
         min_minority=params.min_minority, min_prevalence=params.min_prevalence,
@@ -134,12 +141,12 @@ def main() -> None:
         report = "\n\n".join([
             trait_report,
             estimate.format_phylo_report(
-                pd.DataFrame(columns=["block"]), permutations=params.permutations,
+                pd.DataFrame(columns=["scope", "block"]), permutations=params.permutations,
                 support=support, rooting=rooting, conflicts=conflicts, clades=clades,
             ),
         ])
         out_report.write_text(report + "\n")
-        pd.DataFrame(columns=["block"]).to_csv(out_table, sep="\t", index=False)
+        pd.DataFrame(columns=["scope", "block"]).to_csv(out_table, sep="\t", index=False)
         print(report)
         return
 
@@ -160,7 +167,7 @@ def main() -> None:
     T.write_tree(rooted, tree_path)
 
     table = estimate.run_estimators(
-        tree_path, binary[testable], covariates, outgroup_ids,
+        tree_path, binary[testable], covariates, outgroup_ids, tasks=work,
         r_script=R_SCRIPT, workdir=workdir,
         signal=params.signal, regression=params.regression,
         permutations=params.permutations, seed=params.seed,

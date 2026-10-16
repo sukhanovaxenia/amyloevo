@@ -55,6 +55,14 @@ MIN_MINORITY = 10
 MIN_PREVALENCE = 0.05
 
 
+#: A clade smaller than this is not screened at all. Below it the prevalence
+#: gate would do the refusing anyway, and this makes the reason legible.
+MIN_CLADE = 25
+
+#: The scope name for a test run over the whole tree.
+WHOLE_TREE = "all"
+
+
 @dataclass
 class TraitCheck:
     """One trait column, and whether it can carry a phylogenetic test."""
@@ -64,6 +72,8 @@ class TraitCheck:
     n_present: int
     usable: bool = False
     reason: str = ""
+    #: Which tips were screened: :data:`WHOLE_TREE`, or a clade name.
+    scope: str = WHOLE_TREE
 
     @property
     def prevalence(self) -> float:
@@ -131,6 +141,7 @@ def screen(
     *,
     min_minority: int = MIN_MINORITY,
     min_prevalence: float = MIN_PREVALENCE,
+    scope: str = WHOLE_TREE,
 ) -> list[TraitCheck]:
     """Decide, per column, whether it can carry *D* or a logistic regression."""
     checks = []
@@ -138,7 +149,7 @@ def screen(
     for label in binary.columns:
         col = binary[label].to_numpy()
         present = int(col.sum())
-        check = TraitCheck(label=str(label), n=n, n_present=present)
+        check = TraitCheck(label=str(label), n=n, n_present=present, scope=scope)
         if present == 0 or present == n:
             check.reason = (
                 f"constant: {'every' if present else 'no'} tip carries it, so "
@@ -163,6 +174,79 @@ def screen(
 
 def usable(checks) -> list[str]:
     return [c.label for c in checks if c.usable]
+
+
+def screen_by_clade(
+    binary,
+    groups,
+    *,
+    min_minority: int = MIN_MINORITY,
+    min_prevalence: float = MIN_PREVALENCE,
+    min_clade: int = MIN_CLADE,
+    whole_tree: bool = True,
+) -> list[TraitCheck]:
+    """Screen every block over the whole tree and inside each clade.
+
+    Why the per-clade pass exists. On a gene tree of a paralogue family the
+    deepest split is the duplication itself, and the paralogue groups have
+    clade-specific APR profiles. A lambda fitted over the whole tree then comes
+    back at or near 1 with a likelihood-ratio p against lambda = 0 of
+    essentially zero -- which is arithmetic, not a finding: the trait does
+    separate the three deep clades, and any statistic asking "does this trait
+    follow this tree" must say yes. Observed on the FXR1 family: lambda between
+    0.75 and 1.00 on all 15 blocks, five of them tied at the optimiser's upper
+    bound to twelve digits.
+
+    The question that is not answered by the clade structure is whether the
+    trait follows the tree *within* a paralogue group, where the duplication is
+    no longer in the picture. That needs the same screen applied to each clade's
+    tips, because prevalence inside a clade is not prevalence overall: a block
+    carried by 95% of everything can be at 50% inside one group, and a block at
+    50% overall can be universal in one group and absent from another. Both
+    become testable or refused on their own terms.
+
+    ``groups`` maps sequence id to clade name; ids missing from it, and clades
+    smaller than ``min_clade``, are left out with the reason recorded.
+    """
+    checks = []
+    if whole_tree:
+        checks += screen(
+            binary, min_minority=min_minority, min_prevalence=min_prevalence,
+            scope=WHOLE_TREE,
+        )
+    members: dict[str, list] = {}
+    for pid in binary.index:
+        name = groups.get(pid)
+        if name:
+            members.setdefault(str(name), []).append(pid)
+    for name in sorted(members):
+        rows = members[name]
+        if len(rows) < min_clade:
+            checks += [
+                TraitCheck(
+                    label=str(label), n=len(rows), n_present=0, scope=name,
+                    reason=(
+                        f"clade has {len(rows)} tip(s) (need {min_clade}); "
+                        f"below that the prevalence gate refuses everything "
+                        f"anyway and the reason reads as biology"
+                    ),
+                )
+                for label in binary.columns
+            ]
+            continue
+        checks += screen(
+            binary.loc[rows], min_minority=min_minority,
+            min_prevalence=min_prevalence, scope=name,
+        )
+    return checks
+
+
+def tasks(checks):
+    """The ``(scope, block)`` pairs to hand the estimators, in a stable order."""
+    import pandas as pd
+
+    rows = [(c.scope, c.label) for c in checks if c.usable]
+    return pd.DataFrame(rows, columns=["scope", "block"])
 
 
 def covariates(
@@ -217,33 +301,60 @@ def format_trait_report(
         "=" * 72,
         f"present when occupancy > {threshold:.2f}; testable when the minority "
         f"state has >= {min_minority} tip(s) and >= {min_prevalence:.0%} of them",
-        "",
-        f"  {'block':16s} {'n':>5s} {'present':>8s} {'prev':>7s}  verdict",
     ]
-    for c in checks:
-        verdict = "testable" if c.usable else f"skipped: {c.reason}"
-        lines.append(
-            f"  {c.label:16s} {c.n:5d} {c.n_present:8d} {c.prevalence:6.1%}  {verdict}"
-        )
+    scopes = list(dict.fromkeys(c.scope for c in checks))
+    for scope in scopes:
+        rows = [c for c in checks if c.scope == scope]
+        if len(scopes) > 1:
+            heading = (
+                "whole tree" if scope == WHOLE_TREE else f"within {scope}"
+            )
+            lines += ["", f"-- {heading}  ({rows[0].n} tip(s)) " + "-" * 30]
+        lines += [
+            "",
+            f"  {'block':16s} {'n':>5s} {'present':>8s} {'prev':>7s}  verdict",
+        ]
+        for c in rows:
+            verdict = "testable" if c.usable else f"skipped: {c.reason}"
+            lines.append(
+                f"  {c.label:16s} {c.n:5d} {c.n_present:8d} "
+                f"{c.prevalence:6.1%}  {verdict}"
+            )
     lines += [
         "",
-        f"{len(keep)} of {len(checks)} block(s) will be tested. The threshold is "
-        f"a choice, not a measurement:",
+        f"{len(keep)} of {len(checks)} block-by-scope test(s) will be run. The "
+        f"threshold is a choice, not a measurement:",
         "re-run at 0.4 and 0.6 and report whether the conclusion survives.",
-        "=" * 72,
     ]
+    if len(scopes) > 1:
+        lines += [
+            "",
+            "The whole-tree rows and the per-clade rows answer different "
+            "questions. Over the",
+            "whole tree the deepest split IS the duplication and the paralogue "
+            "profiles differ,",
+            "so any statistic asking 'does this trait follow this tree' has to "
+            "say yes. Within a",
+            "clade that structure is gone, and the answer is no longer "
+            "foreordained.",
+        ]
+    lines.append("=" * 72)
     return "\n".join(lines)
 
 
 __all__ = [
+    "MIN_CLADE",
     "MIN_MINORITY",
     "MIN_PREVALENCE",
     "PRESENCE_THRESHOLD",
+    "WHOLE_TREE",
     "TraitCheck",
     "binarise",
     "continuous",
     "covariates",
     "format_trait_report",
     "screen",
+    "screen_by_clade",
+    "tasks",
     "usable",
 ]

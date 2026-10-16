@@ -1,27 +1,61 @@
-fix(phylo): the lambda column printed a dash in every row
+fix(phylo): every D failed on a label check, and lambda answered a foregone question
 
-`format_phylo_report` read each value off `DataFrame.itertuples`, which renames
-any column that is not a valid Python identifier. `lambda` is a keyword, so
-`row.lambda` can never exist, the `getattr` fallback returned nan, and the whole
-Pagel's-lambda column rendered as `--` for every block. Nothing errored: the
-report was well formed and silently missing one of the two statistics the step
-exists to produce. Found by running the step against a stand-in for Rscript and
-looking at the output, not by reading the code.
+Three problems, all of which produced a complete, well-formatted table.
 
-Two changes, because either alone would leave the trap in place:
+1. caper refused the tree and D came back empty for all 15 blocks.
+   comparative.data checks duplicated(c(tip.label, node.label)) -- one combined
+   vector -- and IQ-TREE writes branch support into the internal node labels.
+   126 of the 330 node labels on the FXR1 tree are repeated ("100/100" eleven
+   times), so every phylo.d call died with "Labels duplicated between tips and
+   nodes in phylogeny" while lambda and phyloglm, which never read node labels,
+   ran fine. The result was a D column of nothing with no sign that the cause
+   was a label check rather than the data. The support values are read off the
+   treefile on the Python side and reported there, so they are now dropped
+   before comparative.data, with a message saying how many and why.
 
-* the report reads rows as dicts, so no column name can be mangled on the way
-  in, and it falls back to the bare name as well;
-* the R script now writes `pagel_lambda`, with a comment saying why it is not
-  called `lambda`.
+2. lambda over the whole gene tree asks a question whose answer is settled in
+   advance. The deepest split in this tree IS the duplication, and the three
+   paralogue groups carry different APR profiles, so "is this trait
+   non-independent on this tree" has to come back yes -- and it did, with
+   lambda between 0.75 and 1.00 on all 15 blocks and likelihood-ratio p-values
+   down to 0.0 and 7.16e-320.
 
-Also corrects the paired-contrast count in the R script's comment on why the
-clade is not a regression predictor: the paired within-taxon contrast runs over
-55 taxa, not 82. 87 of 104 taxa carry all three paralogues, the completeness
-filter leaves 55, and the 82 in DESIGN.md section 4 is a third quantity --
-sequences per taxon over all 372, invertebrates included. Three counts, one of
-which is the sample size of the test offered as the honest alternative to
-phyloglm, so it is worth having right.
+   Every block is now screened and tested inside each clade as well as over the
+   whole tree, and the two are kept apart everywhere: separate sections in the
+   report, separate BH families in `adjust` (pooling them would inflate m
+   four-fold for no gain in error control), a `scope` column in the table.
+   Prevalence inside a clade is not prevalence overall, which is the point: a
+   block carried by 95% of everything can be at 50% inside one group, and on
+   this family most blocks turn out to be universal or absent WITHIN a
+   paralogue group and only variable between them. That is a result the
+   whole-tree rows cannot state.
 
-250 tests passing. The new ones pin that a lambda value given to the report
-appears in it, under either column name.
+3. Five blocks shared a lambda of 0.999926686256414 -- twelve identical digits
+   -- and all fifteen a phyloglm alpha of 1.51447 to six figures. Independent
+   fits to different traits do not agree to that precision; those are
+   optimiser bounds reported as estimates. `boundary_warnings` now flags a
+   lambda at the top of its scale, lambdas tied to nine significant digits, and
+   alpha on a search bound -- taking phyloglm's own `alphaWarn` when it is
+   available rather than inferring it from ties -- and the R script records
+   alphaWarn and convergence per fit. A p-value below 1e-300 is printed as
+   "<1e-300" instead of as 0.0, because "p = 0" is not a sentence to put in a
+   manuscript.
+
+   R's warnings are also summarised at the end of the script. "There were 16
+   warnings" in a log nobody expands is the same as silence.
+
+Separately, `itol_annotations.py` is no longer a stub. Five datasets for the
+gene tree -- block presence (DATASET_BINARY), paralogue colours (TREE_COLORS),
+readable leaf labels (LABELS), and mean block occupancy as both a gradient and
+bars. Two decisions worth the words: a tip with no block profile gets -1
+(unknown), not 0, since 75 of the 357 FXR1 tips failed the completeness filter
+and drawing them as lacking every block would be an invented result; and the
+palette comes from viz.groups.colour_for rather than a second hand-keyed dict,
+so a paralogue cannot be one colour in a figure and another on the tree.
+
+iTOL silently drops any row whose label is not a leaf, so a dataset built from
+the wrong id column uploads cleanly and renders an empty track -- which reads as
+"no APRs in this family". `check_tips` compares every dataset against the tree's
+tips and the script logs the counts.
+
+294 tests passing, 46 of them new.

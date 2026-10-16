@@ -1,0 +1,210 @@
+"""iTOL annotation files: the formats, and the silent failures they invite.
+
+iTOL does not validate uploads in any way a caller can see. A row whose label
+is not a leaf is dropped, a malformed colour becomes black, and an unexpected
+binary value becomes "absent". Every test here is about one of those three
+turning a broken dataset into a plausible-looking figure.
+"""
+
+from __future__ import annotations
+
+import pandas as pd
+import pytest
+
+from amyloevo.viz import itol
+
+
+def _presence():
+    return pd.DataFrame(
+        {"blk1": [1, 0, -1], "blk2": [0, 1, 1]},
+        index=["a", "b", "c"],
+    )
+
+
+def _fields(text, key):
+    for line in text.splitlines():
+        if line.startswith(key + "\t"):
+            return line.split("\t")[1:]
+    return None
+
+
+# --- binary ----------------------------------------------------------------
+
+
+def test_binary_dataset_has_the_header_itol_requires():
+    text = itol.binary_dataset(_presence())
+    lines = text.splitlines()
+    assert lines[0] == "DATASET_BINARY"
+    assert "SEPARATOR\tTAB" in lines
+    assert "DATA" in lines
+    assert _fields(text, "FIELD_LABELS") == ["blk1", "blk2"]
+
+
+def test_binary_rows_follow_the_data_line_and_carry_every_column():
+    text = itol.binary_dataset(_presence())
+    body = text.splitlines()[text.splitlines().index("DATA") + 1:]
+    assert len(body) == 3
+    assert body[0].split("\t") == ["a", "1", "0"]
+    assert body[2].split("\t") == ["c", "-1", "1"]
+
+
+def test_minus_one_survives_as_unknown():
+    """0 is a claim that the sequence lacks the block; -1 says nothing is
+    known. 75 of the FXR1 tips have no block profile at all."""
+    text = itol.binary_dataset(_presence())
+    assert "\t-1\t" in text
+
+
+def test_an_unexpected_binary_value_is_refused():
+    frame = pd.DataFrame({"blk1": [2]}, index=["a"])
+    with pytest.raises(ValueError, match="not -1, 0 or 1"):
+        itol.binary_dataset(frame)
+
+
+def test_a_missing_value_becomes_unknown_not_absent():
+    frame = pd.DataFrame({"blk1": [float("nan")]}, index=["a"])
+    text = itol.binary_dataset(frame)
+    assert text.strip().endswith("a\t-1")
+
+
+def test_field_colours_must_match_the_columns():
+    with pytest.raises(ValueError, match="field colour"):
+        itol.binary_dataset(_presence(), field_colours=["#D55E00"])
+
+
+def test_per_field_colours_are_used_in_order():
+    text = itol.binary_dataset(
+        _presence(), field_colours=["#D55E00", "#0072B2"]
+    )
+    assert _fields(text, "FIELD_COLORS") == ["#D55E00", "#0072B2"]
+    assert _fields(text, "LEGEND_COLORS") == ["#D55E00", "#0072B2"]
+
+
+def test_the_legend_can_be_left_out():
+    assert "LEGEND_TITLE" not in itol.binary_dataset(_presence(), legend=False)
+
+
+def test_a_dataset_with_no_blocks_is_refused():
+    with pytest.raises(ValueError, match="no block columns"):
+        itol.binary_dataset(pd.DataFrame(index=["a"]))
+
+
+# --- labels and colours ----------------------------------------------------
+
+
+def test_tree_colors_emits_a_range_and_a_label_row_per_leaf():
+    text = itol.tree_colors({"a": "FXR1", "b": "FMR1"})
+    rows = [l.split("\t") for l in text.splitlines() if "\t" in l][1:]
+    assert ["a", "range", "#D55E00", "FXR1"] in rows
+    assert ["a", "label", "#D55E00"] in rows
+    assert ["b", "range", "#0072B2", "FMR1"] in rows
+
+
+def test_the_group_palette_matches_the_figures():
+    """A paralogue must be the same colour on the tree as in every plot beside
+    it, so the palette is shared rather than re-picked here."""
+    assert itol.GROUP_PALETTE["FXR1"] == "#D55E00"
+    assert itol.GROUP_PALETTE["FMR1"] == "#0072B2"
+    assert itol.GROUP_PALETTE["FXR2"] == "#009E73"
+
+
+def test_an_unknown_group_gets_a_deterministic_colour():
+    first = itol.palette_for(["FXR1", "NEW", "OTHER"])
+    second = itol.palette_for(["OTHER", "NEW", "FXR1"])
+    assert first["NEW"] == second["NEW"]
+    assert first["NEW"] != first["OTHER"]
+
+
+def test_leaves_with_no_group_are_skipped_rather_than_coloured_black():
+    text = itol.tree_colors({"a": "FXR1", "b": "", "c": None})
+    assert "\nb\t" not in text and "\nc\t" not in text
+
+
+def test_either_colour_mode_can_be_switched_off():
+    only_labels = itol.tree_colors({"a": "FXR1"}, colour_ranges=False)
+    assert "range" not in only_labels
+    assert "label" in only_labels
+
+
+def test_labels_dataset_maps_ids_to_display_names():
+    text = itol.labels_dataset({"9606.ENSP00000350170": "Homo sapiens FXR1"})
+    assert text.splitlines()[0] == "LABELS"
+    assert "9606.ENSP00000350170\tHomo sapiens FXR1" in text
+
+
+def test_a_tab_in_a_label_is_refused():
+    with pytest.raises(ValueError, match="tab or newline"):
+        itol.labels_dataset({"a": "Homo\tsapiens"})
+
+
+def test_a_newline_in_a_label_is_refused():
+    with pytest.raises(ValueError, match="tab or newline"):
+        itol.labels_dataset({"a": "Homo\nsapiens"})
+
+
+def test_a_malformed_colour_is_refused():
+    with pytest.raises(ValueError, match="hex colour"):
+        itol.tree_colors({"a": "X"}, palette={"X": "red"})
+
+
+# --- continuous ------------------------------------------------------------
+
+
+def test_gradient_dataset_writes_the_values():
+    text = itol.gradient_dataset({"a": 0.125, "b": 0.5})
+    assert text.splitlines()[0] == "DATASET_GRADIENT"
+    assert "a\t0.125" in text
+    assert "COLOR_MIN\t#FFFFFF" in text
+
+
+def test_a_non_finite_value_is_omitted_rather_than_written_as_zero():
+    text = itol.gradient_dataset({"a": float("nan"), "b": 0.5, "c": None})
+    assert "\na\t" not in text
+    assert "\nc\t" not in text
+    assert "b\t0.5" in text
+
+
+def test_simplebar_carries_a_width():
+    text = itol.simplebar_dataset({"a": 1.0}, width=150)
+    assert text.splitlines()[0] == "DATASET_SIMPLEBAR"
+    assert "WIDTH\t150" in text
+
+
+# --- the silent-drop guard -------------------------------------------------
+
+
+def test_check_tips_separates_the_three_outcomes():
+    result = itol.check_tips(["a", "b", "zz"], ["a", "b", "c"])
+    assert result["matched"] == ["a", "b"]
+    assert result["not_on_tree"] == ["zz"]
+    assert result["tips_without_data"] == ["c"]
+
+
+def test_check_tips_is_the_only_warning_of_a_wrong_id_column():
+    """Every row dropped: iTOL would render an empty track and say nothing."""
+    result = itol.check_tips(["ENSP00000350170"], ["9606.ENSP00000350170"])
+    assert result["matched"] == []
+    assert len(result["not_on_tree"]) == 1
+
+
+def test_collapse_takes_two_leaves_per_clade():
+    text = itol.collapse_clades([("a", "b"), ("c", "d")])
+    assert text.splitlines()[0] == "COLLAPSE"
+    assert "a\tb" in text and "c\td" in text
+
+
+def test_the_tree_palette_is_the_figure_palette():
+    """Not two palettes that happen to agree: itol.palette_for delegates to
+    viz.groups.colour_for, so a paralogue cannot be one colour in a plot and
+    another on the tree."""
+    from amyloevo.viz.groups import colour_for
+
+    names = ["FXR1", "FMR1", "FXR2", "pre-duplication"]
+    assert itol.palette_for(names) == colour_for(names)
+    assert itol.GROUP_PALETTE == colour_for(names)
+
+
+def test_an_explicit_palette_overrides_the_shared_one():
+    resolved = itol.palette_for(["FXR1", "FMR1"], palette={"FXR1": "#000000"})
+    assert resolved["FXR1"] == "#000000"
+    assert resolved["FMR1"] == itol.GROUP_PALETTE["FMR1"]

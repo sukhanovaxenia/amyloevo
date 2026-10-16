@@ -116,9 +116,91 @@ def test_the_report_states_the_threshold_and_every_refusal():
     )
     text = tr.format_trait_report(tr.screen(binary), threshold=0.5)
     assert "occupancy > 0.50" in text
-    assert "1 of 2 block(s) will be tested" in text
+    assert "1 of 2 block-by-scope test(s) will be run" in text
     assert "minority state on 2" in text
     assert "0.4 and 0.6" in text            # the sensitivity instruction
+
+
+# --- per-clade screening ---------------------------------------------------
+
+
+def _clade_frame(n_per_clade=40):
+    """Three clades; block A is clade-specific, block B is balanced everywhere."""
+    ids, groups, a, b = [], {}, [], []
+    for clade in ("FXR1", "FMR1", "FXR2"):
+        for i in range(n_per_clade):
+            pid = f"{clade}_{i}"
+            ids.append(pid)
+            groups[pid] = clade
+            a.append(1 if clade == "FXR1" else 0)
+            b.append(i % 2)
+    return pd.DataFrame({"A": a, "B": b}, index=ids), groups
+
+
+def test_screen_by_clade_covers_the_whole_tree_and_each_clade():
+    binary, groups = _clade_frame()
+    checks = tr.screen_by_clade(binary, groups)
+    scopes = {c.scope for c in checks}
+    assert scopes == {tr.WHOLE_TREE, "FXR1", "FMR1", "FXR2"}
+    assert len(checks) == 4 * 2                     # four scopes, two blocks
+
+
+def test_a_clade_specific_block_is_testable_overall_and_constant_inside():
+    """The point of the per-clade pass. Block A is carried by exactly one clade:
+    over the whole tree that is a third of the tips and perfectly testable,
+    inside each clade there is nothing left to explain."""
+    binary, groups = _clade_frame()
+    by_key = {(c.scope, c.label): c for c in tr.screen_by_clade(binary, groups)}
+    assert by_key[(tr.WHOLE_TREE, "A")].usable
+    assert by_key[(tr.WHOLE_TREE, "A")].prevalence == pytest.approx(1 / 3)
+    for clade in ("FXR1", "FMR1", "FXR2"):
+        check = by_key[(clade, "A")]
+        assert not check.usable
+        assert "constant" in check.reason
+        assert by_key[(clade, "B")].usable       # balanced inside each clade
+
+
+def test_a_small_clade_is_declined_with_its_size_as_the_reason():
+    binary, groups = _clade_frame(n_per_clade=40)
+    for i in range(5):
+        binary.loc[f"tiny_{i}"] = [1, 0]
+        groups[f"tiny_{i}"] = "tiny"
+    checks = [c for c in tr.screen_by_clade(binary, groups) if c.scope == "tiny"]
+    assert checks and not any(c.usable for c in checks)
+    assert "clade has 5 tip(s)" in checks[0].reason
+
+
+def test_ids_with_no_clade_are_left_out_of_the_per_clade_pass():
+    binary, groups = _clade_frame()
+    binary.loc["orphan"] = [1, 1]
+    checks = tr.screen_by_clade(binary, groups)
+    assert {c.scope for c in checks} == {tr.WHOLE_TREE, "FXR1", "FMR1", "FXR2"}
+    whole = next(c for c in checks if c.scope == tr.WHOLE_TREE)
+    assert whole.n == 121                        # the orphan still has a tip
+
+
+def test_whole_tree_can_be_switched_off():
+    binary, groups = _clade_frame()
+    checks = tr.screen_by_clade(binary, groups, whole_tree=False)
+    assert tr.WHOLE_TREE not in {c.scope for c in checks}
+
+
+def test_tasks_lists_only_the_usable_scope_block_pairs():
+    binary, groups = _clade_frame()
+    checks = tr.screen_by_clade(binary, groups)
+    work = tr.tasks(checks)
+    assert list(work.columns) == ["scope", "block"]
+    assert len(work) == sum(1 for c in checks if c.usable)
+    assert ("FXR1", "A") not in set(map(tuple, work.to_numpy()))
+    assert (tr.WHOLE_TREE, "A") in set(map(tuple, work.to_numpy()))
+
+
+def test_the_report_separates_the_scopes_and_says_they_differ():
+    binary, groups = _clade_frame()
+    text = tr.format_trait_report(tr.screen_by_clade(binary, groups))
+    assert "whole tree" in text
+    assert "within FXR1" in text
+    assert "deepest split IS the duplication" in text
 
 
 # --- covariates ------------------------------------------------------------

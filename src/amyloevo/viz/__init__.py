@@ -1,6 +1,7 @@
 """Figures.
 
-``groups`` draws the group-wise APR comparisons: occupancy along the reference,
+``itol`` writes the annotation files for a tree iTOL renders; ``groups`` draws
+the group-wise APR comparisons: occupancy along the reference,
 block occupancy as a group x block heatmap, and paired within-taxon load.
 
 Two rules hold across every figure here. Axes are labelled from the metadata
@@ -14,6 +15,7 @@ matplotlib is imported inside the functions, so importing this package does not
 require it.
 """
 
+from . import itol
 from .groups import (
     GROUP_COLOURS,
     colour_for,
@@ -24,6 +26,7 @@ from .groups import (
 
 __all__ = [
     "GROUP_COLOURS",
+    "itol",
     "colour_for",
     "plot_block_occupancy",
     "plot_group_load",

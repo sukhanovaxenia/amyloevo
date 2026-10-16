@@ -36,14 +36,31 @@ rule meme_export:
 
 
 rule itol_annotations:
+    """Annotation files for the gene tree, one upload per iTOL track.
+
+    Reads the block profiles rather than the conservation table: the thing to
+    put beside a tree of this family is which APR blocks each sequence carries,
+    and that is the block matrix. A tip with no profile gets -1 (unknown), not
+    0 (absent) -- 75 of the 357 FXR1 tips failed the completeness filter and
+    drawing them as lacking every block would be an invented result.
+
+    iTOL drops a row whose label is not a leaf without reporting it, so the
+    script compares every dataset's ids against the tree's tips and logs the
+    counts. An empty track otherwise looks like a finding.
+    """
     input:
         tree="results/phylo/{protein}.treefile",
-        conserve="results/conserve/{protein}.tsv",
+        profiles="results/blocks/{protein}.occupancy.npz",
+        groups="results/group/{protein}.tsv",
+        meta="results/meta/{protein}.tsv",
     output:
         apr="results/viz/itol/{protein}_apr.txt",
         clades="results/viz/itol/{protein}_clades.txt",
+        labels="results/viz/itol/{protein}_labels.txt",
+        load="results/viz/itol/{protein}_load.txt",
+        load_bars="results/viz/itol/{protein}_load_bars.txt",
     params:
-        header_format=config["header_format"],
+        presence_threshold=config["phylo"]["presence_threshold"],
     log:
         "logs/viz/{protein}.itol.log",
     conda:
