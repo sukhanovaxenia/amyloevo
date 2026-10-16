@@ -71,6 +71,14 @@ def floor_warning(permutations: int, n_tests: int, alpha: float = 0.05) -> str:
 #: "p = 0" is not a sentence to put in a manuscript.
 P_UNDERFLOW = 1e-300
 
+#: Columns whose p-value comes from permutations, not from a distribution.
+#: ``phylo.d`` returns the proportion of permuted datasets at least as extreme
+#: as the observed one, so with *k* permutations it can and does return exactly
+#: 0 -- which means "none of the k", not "zero". These print as ``<1/(k+1)``
+#: rather than as 0, for the same reason the likelihood-ratio underflows do:
+#: a reported p of 0 travels into a manuscript as a claim nothing supports.
+PERMUTATION_P = ("d_p_random", "d_p_brownian")
+
 #: At or above this, Pagel's lambda has reached the top of the scale and the
 #: point estimate is not distinguishable from 1 (Brownian on the given tree).
 LAMBDA_CEILING = 0.999
@@ -80,7 +88,7 @@ LAMBDA_CEILING = 0.999
 TIE_DIGITS = 9
 
 
-def boundary_warnings(table) -> list[str]:
+def boundary_warnings(table, *, permutations: int = 0) -> list[str]:
     """Flag fitted values that are bounds of a search rather than estimates.
 
     An optimiser that stops at the edge of its interval still returns a number,
@@ -159,7 +167,29 @@ def boundary_warnings(table) -> list[str]:
                     f"coefficients."
                 )
 
-    for column in ("lambda_p", "glm_p", "d_p_random", "d_p_brownian"):
+    # Two different zeros, and conflating them was itself a bug here: a
+    # permutation p of 0 is the floor of a finite number of draws, while a
+    # likelihood-ratio p of 0 is a double running out of exponent. The first is
+    # a property of the design and is fixed by more permutations; the second is
+    # not fixable and means the test had nothing left to measure.
+    for column in PERMUTATION_P:
+        values = numeric(column)
+        if values is None or not values.size:
+            continue
+        at_floor = int((values <= 0.0).sum())
+        if at_floor:
+            floor = (
+                f"1/{permutations + 1} = {1.0 / (permutations + 1):.3g}"
+                if permutations else "1/(permutations+1)"
+            )
+            out.append(
+                f"{at_floor} of {values.size} value(s) in {column} are at the "
+                f"permutation floor: no permuted dataset was as extreme as the "
+                f"observed one, so the p is reported as <{floor} rather than as "
+                f"0. More permutations would narrow it; nothing else will."
+            )
+
+    for column in ("lambda_p", "glm_p"):
         values = numeric(column)
         if values is not None and values.size:
             under = int((values < P_UNDERFLOW).sum())
@@ -328,9 +358,13 @@ def format_phylo_report(
         width = fmt.split(".")[0] or "7"
         if not np.isfinite(value):
             return f"{'--':>{width}}"
-        # A p-value printed as 0, or as 7.16e-320 in the denormal range, is not
-        # a measurement: the likelihood ratio overflowed what a double can
-        # carry. Reporting it as a number invites "p = 0" in a manuscript.
+        # A permutation p of 0 means "none of the k draws was this extreme",
+        # and its floor is 1/(k+1). Printed as that bound, because 0 is not a
+        # p-value and "p = 0" is what ends up quoted.
+        if key in PERMUTATION_P and value <= 0.0:
+            return f"{'<' + format(1.0 / (permutations + 1), '.3g'):>{width}}"
+        # A likelihood-ratio p in the denormal range is the other way of
+        # printing something a double cannot carry.
         if key.endswith("_p") and 0.0 <= value < P_UNDERFLOW:
             return f"{'<1e-300':>{width}}"
         return format(value, fmt)
@@ -358,7 +392,7 @@ def format_phylo_report(
             )
         lines.append("")
 
-    for warning in boundary_warnings(table):
+    for warning in boundary_warnings(table, permutations=permutations):
         lines += ["  !! " + warning, ""]
 
     notes = []
@@ -425,6 +459,7 @@ def format_phylo_report(
 __all__ = [
     "DEFAULT_RSCRIPT",
     "LAMBDA_CEILING",
+    "PERMUTATION_P",
     "P_COLUMNS",
     "P_UNDERFLOW",
     "Q_FOR_P",

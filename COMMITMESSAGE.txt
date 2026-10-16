@@ -1,61 +1,32 @@
-fix(phylo): every D failed on a label check, and lambda answered a foregone question
+fix(phylo): a permutation p of 0 is not a p of 0, and two phyloglm fits were lost
 
-Three problems, all of which produced a complete, well-formatted table.
+The first run with D working returned p(rnd) = 0 on 34 of 37 rows, and the
+report printed it as 0. It is not zero: phylo.d returns the proportion of
+permuted datasets at least as extreme as the observed one, so with 1,000
+permutations the floor is 1/1001 and 0 means "none of the thousand". Printed as
+0 it travels into a manuscript as a claim nothing supports -- the same mistake
+this code already guards against for the likelihood-ratio underflows, missed
+here because the guard keyed on the column name ending in "_p" and these end in
+"_random" and "_brownian". They now print as <0.000999, derived from the
+permutation count rather than hard-coded.
 
-1. caper refused the tree and D came back empty for all 15 blocks.
-   comparative.data checks duplicated(c(tip.label, node.label)) -- one combined
-   vector -- and IQ-TREE writes branch support into the internal node labels.
-   126 of the 330 node labels on the FXR1 tree are repeated ("100/100" eleven
-   times), so every phylo.d call died with "Labels duplicated between tips and
-   nodes in phylogeny" while lambda and phyloglm, which never read node labels,
-   ran fine. The result was a D column of nothing with no sign that the cause
-   was a label check rather than the data. The support values are read off the
-   treefile on the Python side and reported there, so they are now dropped
-   before comparative.data, with a message saying how many and why.
+boundary_warnings was conflating the two zeros as well, reporting a permutation
+floor as a double-precision underflow. They are different failures: more
+permutations fix the first and nothing fixes the second, so they now say so
+separately.
 
-2. lambda over the whole gene tree asks a question whose answer is settled in
-   advance. The deepest split in this tree IS the duplication, and the three
-   paralogue groups carry different APR profiles, so "is this trait
-   non-independent on this tree" has to come back yes -- and it did, with
-   lambda between 0.75 and 1.00 on all 15 blocks and likelihood-ratio p-values
-   down to 0.0 and 7.16e-320.
+phyloglm: two per-clade fits died with "edge.length[i] is NaN. Please reduce
+btol", which is phylolm telling the caller what to do. It now retries at
+btol = 10 when btol = 50 fails, and records in the note that it did -- the two
+fits are not interchangeable and a reader should know which one produced the
+coefficient.
 
-   Every block is now screened and tested inside each clade as well as over the
-   whole tree, and the two are kept apart everywhere: separate sections in the
-   report, separate BH families in `adjust` (pooling them would inflate m
-   four-fold for no gain in error control), a `scope` column in the table.
-   Prevalence inside a clade is not prevalence overall, which is the point: a
-   block carried by 95% of everything can be at 50% inside one group, and on
-   this family most blocks turn out to be universal or absent WITHIN a
-   paralogue group and only variable between them. That is a result the
-   whole-tree rows cannot state.
+Also worth recording from that run, since it contradicts something this file
+warned about: phyloglm's own alphaWarn came back 0 for all 35 fits that
+reported it. The alpha of 1.51447 shared to six figures across the whole-tree
+fits is therefore NOT a search bound -- it is alpha being determined by the
+tree, which is the same tree for every block, with `length` barely shifting it.
+The tie-based heuristic stays, because it is right to look twice at fifteen
+identical estimates, but alphaWarn is the authority and the warning says so.
 
-3. Five blocks shared a lambda of 0.999926686256414 -- twelve identical digits
-   -- and all fifteen a phyloglm alpha of 1.51447 to six figures. Independent
-   fits to different traits do not agree to that precision; those are
-   optimiser bounds reported as estimates. `boundary_warnings` now flags a
-   lambda at the top of its scale, lambdas tied to nine significant digits, and
-   alpha on a search bound -- taking phyloglm's own `alphaWarn` when it is
-   available rather than inferring it from ties -- and the R script records
-   alphaWarn and convergence per fit. A p-value below 1e-300 is printed as
-   "<1e-300" instead of as 0.0, because "p = 0" is not a sentence to put in a
-   manuscript.
-
-   R's warnings are also summarised at the end of the script. "There were 16
-   warnings" in a log nobody expands is the same as silence.
-
-Separately, `itol_annotations.py` is no longer a stub. Five datasets for the
-gene tree -- block presence (DATASET_BINARY), paralogue colours (TREE_COLORS),
-readable leaf labels (LABELS), and mean block occupancy as both a gradient and
-bars. Two decisions worth the words: a tip with no block profile gets -1
-(unknown), not 0, since 75 of the 357 FXR1 tips failed the completeness filter
-and drawing them as lacking every block would be an invented result; and the
-palette comes from viz.groups.colour_for rather than a second hand-keyed dict,
-so a paralogue cannot be one colour in a figure and another on the tree.
-
-iTOL silently drops any row whose label is not a leaf, so a dataset built from
-the wrong id column uploads cleanly and renders an empty track -- which reads as
-"no APRs in this family". `check_tips` compares every dataset against the tree's
-tips and the script logs the counts.
-
-294 tests passing, 46 of them new.
+300 tests passing.

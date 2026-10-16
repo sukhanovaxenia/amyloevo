@@ -310,3 +310,42 @@ def test_boundary_warnings_appear_in_the_report():
 
 def test_boundary_warnings_on_an_empty_table_say_nothing():
     assert estimate.boundary_warnings(pd.DataFrame()) == []
+
+
+def test_a_permutation_p_of_zero_prints_as_its_floor_not_as_zero():
+    """phylo.d returns the proportion of permutations at least as extreme, so 0
+    means 'none of the k' and its floor is 1/(k+1). The first real FXR1 run had
+    a p(rnd) of 0 on 34 of 37 rows."""
+    text = estimate.format_phylo_report(
+        _table(d_estimate=[-0.3], d_p_random=[0.0], d_p_brownian=[0.74]),
+        permutations=1000,
+    )
+    assert "<0.000999" in text
+    assert "0.74" in text                       # the non-zero one is untouched
+
+
+def test_the_floor_follows_the_permutation_count():
+    text = estimate.format_phylo_report(
+        _table(d_p_random=[0.0]), permutations=99,
+    )
+    assert "<0.01" in text
+
+
+def test_a_permutation_p_is_not_mislabelled_as_an_underflow():
+    text = estimate.format_phylo_report(
+        _table(d_p_random=[0.0]), permutations=1000,
+    )
+    assert "<1e-300" not in text
+
+
+def test_the_two_kinds_of_zero_are_reported_differently():
+    """A permutation p of 0 is the floor of k draws and more draws would narrow
+    it; a likelihood-ratio p of 0 is a double out of exponent and nothing will.
+    Treating the first as the second was a bug in this function."""
+    table = _table(d_p_random=[0.0], lambda_p=[0.0], pagel_lambda=[0.5])
+    warnings = estimate.boundary_warnings(table, permutations=1000)
+    floor = [w for w in warnings if "permutation floor" in w]
+    under = [w for w in warnings if "double precision" in w]
+    assert len(floor) == 1 and "d_p_random" in floor[0]
+    assert len(under) == 1 and "lambda_p" in under[0]
+    assert "d_p_random" not in under[0]

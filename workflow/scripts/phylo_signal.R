@@ -242,12 +242,29 @@ for (k in seq_len(nrow(tasks))) {
       notes <- c(notes, "phyloglm skipped: presence is constant on the fitted subset")
     } else {
       rownames(sub) <- sub$id
-      fit <- try(phyloglm(presence ~ length, data = sub,
-                          phy = keep.tip(sub_phy, sub$id),
+      # btol bounds how far the fitted probabilities may run from the data.
+      # 50 is generous and on small, deep subtrees it lets the branch-length
+      # transformation produce NaN ("edge.length[i] is NaN. Please reduce
+      # btol"). phylolm says to reduce it, so that is what happens here rather
+      # than the fit being lost: two of the FXR1 per-clade fits died this way
+      # on the first run. A retry at a smaller bound is recorded in the note,
+      # because the two fits are not interchangeable.
+      sub_tree <- keep.tip(sub_phy, sub$id)
+      fit <- try(phyloglm(presence ~ length, data = sub, phy = sub_tree,
                           method = "logistic_MPLE", btol = 50), silent = TRUE)
       if (inherits(fit, "try-error")) {
-        notes <- c(notes, paste0("phyloglm failed: ",
-                                 trimws(as.character(attr(fit, "condition")$message))))
+        first <- trimws(as.character(attr(fit, "condition")$message))
+        fit <- try(phyloglm(presence ~ length, data = sub, phy = sub_tree,
+                            method = "logistic_MPLE", btol = 10), silent = TRUE)
+        if (!inherits(fit, "try-error")) {
+          notes <- c(notes, "phyloglm refitted at btol = 10 after btol = 50 failed")
+        }
+      } else {
+        first <- ""
+      }
+      if (inherits(fit, "try-error")) {
+        notes <- c(notes, paste0(
+          "phyloglm failed at btol = 50 and 10: ", first))
       } else {
         s <- summary(fit)$coefficients
         if ("length" %in% rownames(s)) {
