@@ -38,6 +38,23 @@ GROUP_PALETTE = colour_for(["FXR1", "FMR1", "FXR2", "pre-duplication"])
 
 #: iTOL shape codes. 2 is a filled circle, which reads best at 300+ leaves.
 SHAPE_SQUARE, SHAPE_CIRCLE, SHAPE_STAR = 1, 2, 3
+SHAPE_TRIANGLE_RIGHT, SHAPE_TRIANGLE_LEFT, SHAPE_CHECK = 4, 5, 6
+
+#: The shapes worth cycling for a categorical variable. Codes 7-12 exist but
+#: are lines and arrows, which do not read as category markers at leaf size.
+#: Six shapes crossed with the palette gives far more distinguishable
+#: combinations than either alone -- and shape survives greyscale printing and
+#: the common forms of colour blindness, which colour does not.
+CATEGORY_SHAPES = (
+    SHAPE_CIRCLE, SHAPE_SQUARE, SHAPE_STAR, SHAPE_TRIANGLE_RIGHT,
+    SHAPE_TRIANGLE_LEFT, SHAPE_CHECK,
+)
+
+#: Where a symbol is drawn. A negative integer is an external column -- -1 is
+#: the first one, outside the tree -- and a value in [0, 1] places it along the
+#: branch. External is the default here: at 357 leaves a symbol on the branch
+#: lands in the thicket near the tips and is exactly what "not visible" means.
+EXTERNAL_COLUMN = -1
 
 SEPARATOR = "\t"
 
@@ -83,6 +100,13 @@ def palette_for(groups, palette=None) -> dict[str, str]:
     beside it agree by construction. ``palette`` overrides it entirely when a
     caller has its own scheme; names missing from an override fall back to
     ``colour_for``.
+
+    **Pass every group, not the ones you are drawing.** ``colour_for`` assigns
+    the palette by position in the sorted names, so a call with a subset shifts
+    every colour: ``palette_for(["FXR1"])`` is blue, while ``palette_for`` over
+    all four FXR1-family groups makes FXR1 orange, as the figures do. Sharing
+    the function is necessary and not sufficient, and the mismatch is silent --
+    the tree simply comes out in colours that do not match the plots beside it.
     """
     names = [str(g) for g in dict.fromkeys(groups) if g]
     resolved = colour_for(names)
@@ -187,17 +211,27 @@ def tree_colors(
     *,
     colour_labels: bool = True,
     colour_ranges: bool = True,
+    clades=None,
 ) -> str:
     """``TREE_COLORS``: a background and label colour per leaf, by group.
 
-    ``groups`` maps sequence id to group name. ``range`` rows give the leaf a
-    coloured background with the group name as its legend entry; ``label`` rows
-    colour the leaf text. Both are emitted by default because either alone is
-    hard to read on a large tree -- the background is invisible on a narrow
-    leaf, and coloured text disappears when labels are hidden.
+    ``groups`` maps sequence id to group name. ``label`` rows colour the leaf
+    text; ``range`` rows give a coloured background.
+
+    ``clades`` is the better way to draw those backgrounds when the groups are
+    monophyletic: an iterable of ``(node, group)`` where ``node`` is a clade
+    specification from ``phylo.tree.mrca_pair`` (``"LEAF1|LEAF2"``). One range
+    per clade paints a single block, where 357 per-leaf ranges paint 357 thin
+    stripes that read as noise and hide where a clade begins and ends. Pass
+    ``colour_ranges=False`` alongside it so the two do not fight.
     """
     colours = palette_for(groups.values(), palette)
     lines = ["TREE_COLORS", SEPARATOR_DECL, "DATA"]
+    for node, group in (clades or ()):
+        lines.append(SEPARATOR.join([
+            _check_label(node), "range",
+            _check_colour(colours[str(group)]), _check_label(group),
+        ]))
     for pid, group in groups.items():
         if not group:
             continue
@@ -209,6 +243,138 @@ def tree_colors(
             )
         if colour_labels:
             lines.append(SEPARATOR.join([name, "label", colour]))
+    return "\n".join(lines) + "\n"
+
+
+def category_styles(names, palette=None, shapes=CATEGORY_SHAPES):
+    """A distinct ``(shape, colour)`` per group NAME, deterministic by name.
+
+    Takes the names, not an id-to-name mapping: iterating a mapping yields its
+    keys, so passing one here silently styles the sequence ids instead of the
+    groups and every lookup afterwards misses. A mapping is accepted and its
+    values used, rather than being left to fail somewhere else.
+
+    Shape varies fastest and colour next, so the first six groups differ in
+    shape *and* colour and only then do shapes repeat under a new colour. Sorted
+    by name, so the same set of groups always gets the same styles and two runs
+    produce comparable figures.
+    """
+    from collections.abc import Mapping
+
+    if isinstance(names, Mapping):
+        names = names.values()
+    names = sorted({str(g) for g in names if g})
+    colours = palette_for(names, palette)
+    out = {}
+    for i, name in enumerate(names):
+        out[name] = (shapes[i % len(shapes)], colours[name])
+    return out
+
+
+def symbol_dataset(
+    groups,
+    *,
+    label: str = "taxonomic group",
+    palette=None,
+    styles=None,
+    size: int = 10,
+    position: int = EXTERNAL_COLUMN,
+    fill: int = 1,
+    legend: bool = True,
+) -> str:
+    """``DATASET_SYMBOL``: one shape per leaf, by category.
+
+    ``groups`` maps sequence id to a group name -- a taxonomic group, as
+    produced by ``io.annotate.major_groups``, or anything else categorical.
+    Leaves with no group are left out rather than given a default symbol: an
+    unknown taxon and a taxon in the leftover bucket are different statements.
+
+    This is the right track for a taxonomic group on a **gene** tree. A clade
+    annotation is not: "Mammalia" appears once inside each paralogue clade and
+    is therefore not a clade at all, so a range drawn at its MRCA would cover
+    the whole tree. A per-leaf symbol carries the same information and cannot
+    be wrong about the topology.
+    """
+    styles = styles or category_styles(groups.values(), palette)
+    unstyled = sorted({str(g) for g in groups.values() if g} - set(styles))
+    if unstyled:
+        raise KeyError(
+            f"no style for group(s) {unstyled}; a styles mapping passed in "
+            f"must cover every group present, or iTOL would draw nothing for "
+            f"those leaves and say nothing about it"
+        )
+    lines = _header("DATASET_SYMBOL", label, next(iter(styles.values()))[1]
+                    if styles else "#1A1A1A")
+    lines.append(f"MAXIMUM_SIZE{SEPARATOR}{int(size)}")
+    if legend and styles:
+        names = list(styles)
+        lines += [
+            f"LEGEND_TITLE{SEPARATOR}{_check_label(label)}",
+            "LEGEND_SHAPES" + SEPARATOR
+            + SEPARATOR.join(str(styles[n][0]) for n in names),
+            "LEGEND_COLORS" + SEPARATOR
+            + SEPARATOR.join(_check_colour(styles[n][1]) for n in names),
+            "LEGEND_LABELS" + SEPARATOR
+            + SEPARATOR.join(_check_label(n) for n in names),
+        ]
+    lines.append("DATA")
+    for pid, group in groups.items():
+        if not group:
+            continue
+        shape, colour = styles[str(group)]
+        lines.append(SEPARATOR.join([
+            _check_label(pid), str(int(shape)), str(int(size)),
+            _check_colour(colour), str(int(fill)), str(int(position)),
+            _check_label(group),
+        ]))
+    return "\n".join(lines) + "\n"
+
+
+def colorstrip_dataset(
+    groups,
+    *,
+    label: str = "taxonomic group",
+    palette=None,
+    width: int = 25,
+    margin: int = 0,
+    colour_branches: bool = False,
+    legend: bool = True,
+) -> str:
+    """``DATASET_COLORSTRIP``: a colour band beside the leaves, by category.
+
+    The same information as :func:`symbol_dataset` in a form that reads better
+    at several hundred leaves -- a contiguous band shows where a group starts
+    and stops, which separate symbols do not. Both are offered because they
+    answer different questions: the band shows blocks, the symbols survive
+    greyscale and sit outside the tree where they can be compared against other
+    external columns.
+    """
+    colours = palette_for(groups.values(), palette)
+    lines = _header("DATASET_COLORSTRIP", label,
+                    next(iter(colours.values())) if colours else "#1A1A1A")
+    lines += [
+        f"STRIP_WIDTH{SEPARATOR}{int(width)}",
+        f"MARGIN{SEPARATOR}{int(margin)}",
+        f"COLOR_BRANCHES{SEPARATOR}{1 if colour_branches else 0}",
+    ]
+    if legend and colours:
+        names = sorted(colours)
+        lines += [
+            f"LEGEND_TITLE{SEPARATOR}{_check_label(label)}",
+            "LEGEND_SHAPES" + SEPARATOR + SEPARATOR.join(["1"] * len(names)),
+            "LEGEND_COLORS" + SEPARATOR
+            + SEPARATOR.join(_check_colour(colours[n]) for n in names),
+            "LEGEND_LABELS" + SEPARATOR
+            + SEPARATOR.join(_check_label(n) for n in names),
+        ]
+    lines.append("DATA")
+    for pid, group in groups.items():
+        if not group:
+            continue
+        lines.append(SEPARATOR.join([
+            _check_label(pid), _check_colour(colours[str(group)]),
+            _check_label(group),
+        ]))
     return "\n".join(lines) + "\n"
 
 
@@ -301,17 +467,26 @@ def collapse_clades(nodes) -> str:
 
 
 __all__ = [
+    "CATEGORY_SHAPES",
+    "EXTERNAL_COLUMN",
     "GROUP_COLOURS",
     "GROUP_PALETTE",
+    "SEPARATOR_DECL",
+    "SHAPE_CHECK",
     "SHAPE_CIRCLE",
     "SHAPE_SQUARE",
     "SHAPE_STAR",
+    "SHAPE_TRIANGLE_LEFT",
+    "SHAPE_TRIANGLE_RIGHT",
     "binary_dataset",
+    "category_styles",
     "check_tips",
     "collapse_clades",
+    "colorstrip_dataset",
     "gradient_dataset",
     "labels_dataset",
     "palette_for",
     "simplebar_dataset",
+    "symbol_dataset",
     "tree_colors",
 ]

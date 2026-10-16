@@ -59,6 +59,8 @@ rule itol_annotations:
         labels="results/viz/itol/{protein}_labels.txt",
         load="results/viz/itol/{protein}_load.txt",
         load_bars="results/viz/itol/{protein}_load_bars.txt",
+        taxa_symbols="results/viz/itol/{protein}_taxa_symbols.txt",
+        taxa_strip="results/viz/itol/{protein}_taxa_strip.txt",
     params:
         presence_threshold=config["phylo"]["presence_threshold"],
     log:

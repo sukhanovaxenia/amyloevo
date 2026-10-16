@@ -297,9 +297,51 @@ def root_on_outgroup(
             ),
         )
 
-    tree.root_with_outgroup(*targets)
+    # WHICH side to hand Biopython matters, and getting it wrong is silent.
+    # `root_with_outgroup` roots at the MRCA of its targets, so it only
+    # produces the intended split when that MRCA is exactly the outgroup. On a
+    # tree IQ-TREE wrote as a trifurcation the outgroup frequently spans the
+    # root -- 2 tips under one root child, 55 under another -- and then its
+    # MRCA is the whole tree and rooting there scatters it. The FXR1 tree did
+    # exactly this: the result was a root splitting 2 against 355 while
+    # root_on_outgroup still reported the outgroup monophyletic, which it is,
+    # as one side of a split the rooting had failed to realise.
+    #
+    # So when the outgroup is a clade, root on it; when only its complement is,
+    # root on the complement. The two give the same unrooted split and differ
+    # only in which child Biopython builds.
+    ingroup = [n for n in by_name if n not in set(present)]
+    if _is_clade(tree, present, by_name):
+        tree.root_with_outgroup(*targets)
+    elif _is_clade(tree, ingroup, by_name):
+        tree.root_with_outgroup(tree.common_ancestor([by_name[n] for n in ingroup]))
+    else:
+        tree.root_with_outgroup(*targets)
     _bifurcate_root(tree, set(present))
+
+    # And check: the root must now separate the declared outgroup from the
+    # rest. A rooting that reports success and leaves the sets interleaved is
+    # the failure this verification exists for.
+    sides = [{t.name for t in child.get_terminals()} for child in tree.root]
+    if monophyletic and set(present) not in sides:
+        return Rooting(
+            False, len(present), missing, intruders, None,
+            refused=(
+                f"the outgroup is a valid split but rerooting did not realise "
+                f"it: the root separates {sorted(len(s) for s in sides)} tips "
+                f"rather than {len(present)} from {len(by_name) - len(present)}"
+            ),
+        )
     return Rooting(monophyletic, len(present), missing, intruders, tree)
+
+
+def _is_clade(tree, names, by_name) -> bool:
+    """Whether ``names`` is exactly the terminal set of its own MRCA."""
+    names = [n for n in dict.fromkeys(names) if n in by_name]
+    if len(names) < 2:
+        return bool(names)
+    mrca = tree.common_ancestor([by_name[n] for n in names])
+    return {t.name for t in mrca.get_terminals()} == set(names)
 
 
 def _bifurcate_root(tree, outgroup: set[str]) -> None:
@@ -578,6 +620,40 @@ class CladeCheck:
         )
 
 
+def mrca_pair(tree, ids, *, require_monophyly: bool = True) -> str | None:
+    """Two leaf labels whose MRCA is this group's clade, as ``"LEAF1|LEAF2"``.
+
+    iTOL names an internal node by a pair of leaves under it, so a clade-level
+    annotation needs such a pair rather than a node id -- IQ-TREE's internal
+    node labels are support values and are not stable between runs.
+
+    Returns ``None`` when the group is not monophyletic, which is the point of
+    the check: a ``range`` drawn at the MRCA of a paraphyletic group colours
+    every sequence inside that MRCA, including the ones that are not in the
+    group, and nothing downstream reports it. On a gene tree of a paralogue
+    family this is the normal case for a taxonomic group -- "Mammalia" appears
+    once inside each paralogue clade and is not a clade itself -- so callers
+    get ``None`` far more often than they might expect, and should fall back to
+    per-leaf annotation rather than treating it as an error.
+
+    The pair is the first and last terminal of the MRCA. Under any rooting
+    those lie in different children of it, so their own MRCA is that node
+    again; the function verifies this rather than trusting it.
+    """
+    by_name = _clades_by_name(tree)
+    present = [i for i in dict.fromkeys(ids) if i in by_name]
+    if len(present) < 2:
+        return None
+    mrca = tree.common_ancestor([by_name[i] for i in present])
+    inside = [t.name for t in mrca.get_terminals()]
+    if require_monophyly and set(inside) != set(present):
+        return None
+    first, last = inside[0], inside[-1]
+    if tree.common_ancestor([by_name[first], by_name[last]]) is not mrca:
+        return None
+    return f"{first}|{last}"
+
+
 def clade_checks(tree, membership) -> list[CladeCheck]:
     """Monophyly of each group in ``membership`` (group -> ids) on this tree.
 
@@ -616,6 +692,7 @@ __all__ = [
     "clade_checks",
     "identical_groups",
     "low_occupancy",
+    "mrca_pair",
     "prune_to",
     "read_tree",
     "reconcile",

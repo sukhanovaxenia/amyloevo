@@ -9,6 +9,8 @@ takes one upload per track:
     <protein>_labels.txt     species + paralogue instead of the id (LABELS)
     <protein>_load.txt       APR residues / length, as a heat strip (GRADIENT)
     <protein>_load_bars.txt  the same numbers as bars (SIMPLEBAR)
+    <protein>_taxa_symbols.txt  taxonomic group per leaf (DATASET_SYMBOL)
+    <protein>_taxa_strip.txt    the same, as a colour band (COLORSTRIP)
 
 The check this script exists to print: iTOL matches rows to the tree by leaf
 label and silently drops a row that matches nothing. A dataset built from the
@@ -29,7 +31,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
 
-from amyloevo.phylo.tree import read_tree, tip_labels  # noqa: E402
+from amyloevo.io.annotate import major_groups  # noqa: E402
+from amyloevo.phylo.tree import mrca_pair, tip_labels  # noqa: E402
+from amyloevo.phylo.tree import read_tree  # noqa: E402
 from amyloevo.viz import itol  # noqa: E402
 
 
@@ -38,7 +42,8 @@ def main() -> None:
     for path in out.values():
         path.parent.mkdir(parents=True, exist_ok=True)
 
-    tips = tip_labels(read_tree(snakemake.input.tree))
+    tree = read_tree(snakemake.input.tree)
+    tips = tip_labels(tree)
     meta = pd.read_csv(snakemake.input.meta, sep="\t", dtype={"taxid": "string"})
     groups = pd.read_csv(snakemake.input.groups, sep="\t")
     profiles = np.load(snakemake.input.profiles, allow_pickle=True)
@@ -75,9 +80,36 @@ def main() -> None:
     )
 
     # --- clade colours and readable labels --------------------------------
+    # One range per clade, at its MRCA, for the groups this tree actually makes
+    # monophyletic. Per-leaf ranges draw one thin stripe per tip and hide where
+    # a clade begins; a range at the MRCA of a group that is NOT a clade would
+    # colour sequences outside it, so the check decides which form is used.
     on_tree = {t: group_of.get(t, "") for t in tips}
+    members: dict[str, list[str]] = {}
+    for pid in tips:
+        if on_tree[pid]:
+            members.setdefault(on_tree[pid], []).append(pid)
+    ranges, scattered = [], []
+    for name in sorted(members):
+        node = mrca_pair(tree, members[name])
+        (ranges.append((node, name)) if node else scattered.append(name))
     out["clades"].write_text(
-        itol.tree_colors(on_tree, palette), encoding="utf-8"
+        itol.tree_colors(on_tree, palette, clades=ranges,
+                         colour_ranges=not ranges),
+        encoding="utf-8",
+    )
+
+    # --- taxonomy ---------------------------------------------------------
+    # Per leaf, as symbols in an external column and as a colour band -- never
+    # as clade ranges. On a gene tree a taxonomic group appears once inside
+    # each paralogue clade, so it is not a clade and has no MRCA to colour.
+    taxa = {t: "" for t in tips}
+    taxa.update({k: v for k, v in major_groups(meta).items() if k in taxa})
+    out["taxa_symbols"].write_text(
+        itol.symbol_dataset(taxa, label="taxonomic group"), encoding="utf-8"
+    )
+    out["taxa_strip"].write_text(
+        itol.colorstrip_dataset(taxa, label="taxonomic group"), encoding="utf-8"
     )
     out["labels"].write_text(
         itol.labels_dataset({t: label_of.get(t, t) for t in tips}),
@@ -110,8 +142,14 @@ def main() -> None:
         "clade colours": [k for k, v in on_tree.items() if v],
         "labels": list(tips),
         "load": list(load),
+        "taxon symbols": [k for k, v in taxa.items() if v],
     }
     print(f"{len(tips)} tip(s) on the tree")
+    if ranges:
+        print(f"  {len(ranges)} clade(s) drawn as one range each at their MRCA")
+    if scattered:
+        print(f"  not monophyletic, drawn per leaf instead: "
+              f"{', '.join(scattered)}")
     for name, rows in checks.items():
         result = itol.check_tips(rows, tips)
         print(

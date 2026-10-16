@@ -227,3 +227,104 @@ def test_an_explicit_palette_overrides_the_shared_one():
     resolved = itol.palette_for(["FXR1", "FMR1"], palette={"FXR1": "#000000"})
     assert resolved["FXR1"] == "#000000"
     assert resolved["FMR1"] == itol.GROUP_PALETTE["FMR1"]
+
+
+# --- categorical tracks ----------------------------------------------------
+
+
+def test_category_styles_varies_shape_before_colour():
+    """Shape survives greyscale and colour blindness; colour alone does not.
+    The first six groups must differ in both."""
+    styles = itol.category_styles([f"g{i}" for i in range(6)])
+    assert len({s for s, _ in styles.values()}) == 6
+    assert len({c for _, c in styles.values()}) == 6
+
+
+def test_category_styles_is_stable_under_input_order():
+    first = itol.category_styles(["Aves", "Mammalia", "Insecta"])
+    second = itol.category_styles(["Insecta", "Aves", "Mammalia"])
+    assert first == second
+
+
+def test_category_styles_accepts_a_mapping_and_uses_its_values():
+    """Iterating a mapping yields its KEYS. Passing an id->group mapping here
+    would otherwise style the sequence ids and every later lookup would miss."""
+    styles = itol.category_styles({"seq1": "Mammalia", "seq2": "Aves"})
+    assert set(styles) == {"Mammalia", "Aves"}
+
+
+def test_symbol_dataset_writes_every_field_itol_expects():
+    text = itol.symbol_dataset({"a": "Mammalia"}, size=10)
+    body = text.splitlines()[text.splitlines().index("DATA") + 1:]
+    pid, shape, size, colour, fill, position, label = body[0].split("\t")
+    assert pid == "a" and label == "Mammalia"
+    assert 1 <= int(shape) <= 12
+    assert size == "10" and fill == "1"
+    assert int(position) < 0                 # an external column, not on the branch
+    assert colour.startswith("#")
+    assert "MAXIMUM_SIZE\t10" in text
+
+
+def test_symbols_default_to_an_external_column():
+    """At 357 leaves a symbol placed on the branch lands in the thicket near
+    the tips, which is what 'not visible' means."""
+    assert itol.EXTERNAL_COLUMN < 0
+    text = itol.symbol_dataset({"a": "X"})
+    assert text.strip().endswith(f"1\t{itol.EXTERNAL_COLUMN}\tX")
+
+
+def test_a_leaf_with_no_group_gets_no_symbol():
+    text = itol.symbol_dataset({"a": "Mammalia", "b": "", "c": None})
+    body = text.splitlines()[text.splitlines().index("DATA") + 1:]
+    assert len(body) == 1
+
+
+def test_symbol_dataset_refuses_a_styles_mapping_that_misses_a_group():
+    with pytest.raises(KeyError, match="no style for group"):
+        itol.symbol_dataset({"a": "Mammalia", "b": "Aves"},
+                            styles={"Mammalia": (2, "#D55E00")})
+
+
+def test_colorstrip_carries_its_width_and_a_label_per_row():
+    text = itol.colorstrip_dataset({"a": "Mammalia"}, width=30)
+    assert text.splitlines()[0] == "DATASET_COLORSTRIP"
+    assert "STRIP_WIDTH\t30" in text
+    assert text.strip().endswith("Mammalia")
+
+
+def test_both_categorical_tracks_agree_on_colour():
+    groups = {"a": "Mammalia", "b": "Aves"}
+    styles = itol.category_styles(groups.values())
+    strip = itol.colorstrip_dataset(groups)
+    for name, (_, colour) in styles.items():
+        assert colour in strip
+
+
+# --- clade ranges ----------------------------------------------------------
+
+
+def test_tree_colors_takes_clade_ranges_as_leaf_pairs():
+    groups = {"a": "FXR1", "b": "FXR1", "c": "FMR1", "d": "FXR2",
+              "e": "pre-duplication"}
+    text = itol.tree_colors(groups, colour_ranges=False,
+                            clades=[("a|b", "FXR1")])
+    body = text.splitlines()[text.splitlines().index("DATA") + 1:]
+    assert body[0].split("\t") == ["a|b", "range", "#D55E00", "FXR1"]
+    assert not any(r.split("\t")[1] == "range" for r in body[1:])
+
+
+def test_a_colour_depends_on_the_whole_set_of_groups_passed():
+    """viz.groups.colour_for assigns the palette by position in the SORTED
+    group names, so a file built from a subset gets different colours from the
+    figures. Sharing the function is necessary and not sufficient: the caller
+    has to pass every group. Pinned here because the failure is silent -- the
+    tree simply comes out in colours that do not match the plots beside it."""
+    full = itol.palette_for(["FXR1", "FMR1", "FXR2", "pre-duplication"])
+    subset = itol.palette_for(["FXR1"])
+    assert full["FXR1"] == "#D55E00"
+    assert subset["FXR1"] != full["FXR1"]
+
+
+def test_clade_ranges_and_per_leaf_ranges_can_both_be_off():
+    text = itol.tree_colors({"a": "FXR1"}, colour_ranges=False)
+    assert "range" not in text

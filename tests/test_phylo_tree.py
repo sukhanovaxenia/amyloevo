@@ -288,3 +288,43 @@ def test_root_to_tip_measures_patristic_distance():
     distances = T.root_to_tip(_read(CLEAN))
     assert distances["A"] == pytest.approx(0.4)
     assert distances["O1"] == pytest.approx(0.3)
+
+
+def test_rooting_realises_the_split_when_the_outgroup_spans_the_root():
+    """IQ-TREE writes an unrooted tree as a trifurcation, and an outgroup
+    frequently spans it -- some tips under one root child, the rest under
+    another. Its MRCA is then the whole tree, and Biopython's reroot scatters
+    it. On the FXR1 tree this produced a root splitting 2 tips against 355
+    while the monophyly check still said, correctly, that the outgroup is one
+    side of a valid split."""
+    # O1 sits apart from O2,O3; the ingroup A,B,C,D is the clade, not the
+    # outgroup, so the reroot has to be driven from the ingroup side.
+    newick = "(O1:.1,((A:.1,B:.1):.1,(C:.1,D:.1):.1):.2,(O2:.1,O3:.1):.1);"
+    result = T.root_on_outgroup(_read(newick), ["O1", "O2", "O3"])
+    assert result.monophyletic
+    assert result.tree is not None, result.refused
+    sides = [{t.name for t in c.get_terminals()} for c in result.tree.root]
+    assert {"O1", "O2", "O3"} in sides
+    assert {"A", "B", "C", "D"} in sides
+
+
+def test_mrca_pair_names_a_clade_by_two_of_its_leaves():
+    rooted = T.root_on_outgroup(_read(CLEAN), ["O1", "O2"]).tree
+    spec = T.mrca_pair(rooted, ["A", "B"])
+    assert spec and "|" in spec
+    left, right = spec.split("|")
+    assert {left, right} <= {"A", "B"}
+
+
+def test_mrca_pair_declines_a_group_that_is_not_a_clade():
+    """A range drawn at the MRCA of a paraphyletic group colours every tip
+    inside that MRCA. On a gene tree this is the normal case for a taxonomic
+    group, so None has to be the answer rather than a best effort."""
+    rooted = T.root_on_outgroup(_read(CLEAN), ["O1", "O2"]).tree
+    assert T.mrca_pair(rooted, ["A", "C"]) is None
+
+
+def test_mrca_pair_needs_at_least_two_leaves():
+    rooted = T.root_on_outgroup(_read(CLEAN), ["O1", "O2"]).tree
+    assert T.mrca_pair(rooted, ["A"]) is None
+    assert T.mrca_pair(rooted, []) is None

@@ -186,3 +186,74 @@ def label_map(table, **kwargs) -> dict[str, str]:
     labels, _ = make_labels(table, **kwargs)
     ids = table["id"].tolist() if hasattr(table, "__getitem__") else []
     return dict(zip(ids, labels))
+
+
+#: A group smaller than this is not worth its own symbol or colour on a figure:
+#: it is indistinguishable from the next one at a glance, and a legend of
+#: twenty-five entries is not a legend. Groups below it fall back to a coarser
+#: rank; see :func:`major_groups`.
+MIN_GROUP_SIZE = 5
+
+
+def major_groups(
+    table,
+    ranks=("class", "phylum"),
+    *,
+    min_size: int = MIN_GROUP_SIZE,
+    other_label: str = "other",
+    suffix: str = " (other)",
+) -> dict[str, str]:
+    """Collapse a taxonomy into a handful of groups a figure can show.
+
+    NCBI's ranks are not uniform across a set that spans a kingdom: on the FXR1
+    family ``class`` gives 25 values of which 11 have fewer than three members,
+    while ``phylum`` gives 12 but puts every vertebrate in one bucket. Neither
+    rank alone produces a legend.
+
+    So the ranks are tried from finest to coarsest, and a group is kept the
+    first time it reaches ``min_size``. **The remainder is then re-counted
+    among itself**, which is the part that matters: falling back to ``phylum``
+    for the three coelacanths must not produce "Chordata" as a group, because
+    that name already covers the 217 mammals assigned at the previous rank.
+    Counting only the sequences still unassigned turns it into "Chordata
+    (other)" -- the chordates that were not large enough to name -- and the
+    suffix says so. Whatever is still short at the last rank becomes
+    ``other_label``.
+
+    On the FXR1 set with the defaults this yields nine groups: Mammalia 217,
+    Actinopteri 59, Insecta 33, other 17, Reptilia 14, Aves 12, Chordata
+    (other) 8, Lepidosauria 7, Nematoda (other) 5.
+
+    ``table`` is a DataFrame with an ``id`` column and one column per rank.
+    """
+    ranks = [r for r in ranks if r in getattr(table, "columns", [])]
+    if not ranks:
+        raise KeyError(
+            f"none of the requested ranks are columns of this table; it has "
+            f"{list(getattr(table, 'columns', []))}"
+        )
+    values = {r: dict(zip(table["id"], table[r])) for r in ranks}
+    pending = [str(i) for i in table["id"]]
+    assigned: dict[str, str] = {}
+
+    for depth, rank in enumerate(ranks):
+        counts = Counter(
+            str(values[rank][i]) for i in pending
+            if values[rank].get(i) and str(values[rank][i]).strip()
+        )
+        keep = {name for name, n in counts.items() if n >= min_size}
+        remainder = []
+        for i in pending:
+            name = values[rank].get(i)
+            name = str(name).strip() if name else ""
+            if name in keep:
+                assigned[i] = name if depth == 0 else name + suffix
+            else:
+                remainder.append(i)
+        pending = remainder
+        if not pending:
+            break
+
+    for i in pending:
+        assigned[i] = other_label
+    return assigned

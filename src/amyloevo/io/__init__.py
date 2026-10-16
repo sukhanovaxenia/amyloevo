@@ -13,8 +13,10 @@ with nothing installed.
 from .annotate import (
     DEFAULT_LABEL_TEMPLATE,
     LABEL_FALLBACKS,
+    MIN_GROUP_SIZE,
     AnnotationResult,
     annotate,
+    major_groups,
     label_map,
     make_labels,
     render,
@@ -38,6 +40,7 @@ __all__ = [
     "Taxon",
     "TaxonomyDB",
     "annotate",
+    "major_groups",
     "detect_format",
     "label_map",
     "load_taxonomy",
