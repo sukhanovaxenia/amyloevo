@@ -41,6 +41,15 @@ SHAPE_SQUARE, SHAPE_CIRCLE, SHAPE_STAR = 1, 2, 3
 
 SEPARATOR = "\t"
 
+#: The separator declaration, and the one line in the file that is NOT written
+#: with the separator it declares. iTOL has to read this line before it knows
+#: what the separator is, so the keyword and its value are always divided by a
+#: single space -- which is also why ``SEPARATOR SPACE`` is a legal thing to
+#: write. Emitting it as ``SEPARATOR<tab>TAB`` makes iTOL fail to recognise the
+#: declaration at all and reject the upload with "separator needed", and every
+#: other line in the file is then irrelevant because it never gets that far.
+SEPARATOR_DECL = "SEPARATOR TAB"
+
 
 def _check_label(value: str) -> str:
     """Reject a label that would break the file format."""
@@ -102,7 +111,7 @@ def check_tips(ids, tips) -> dict[str, list[str]]:
 def _header(kind: str, label: str, colour: str) -> list[str]:
     return [
         kind,
-        f"SEPARATOR{SEPARATOR}TAB",
+        SEPARATOR_DECL,
         f"DATASET_LABEL{SEPARATOR}{_check_label(label)}",
         f"COLOR{SEPARATOR}{_check_colour(colour)}",
     ]
@@ -188,7 +197,7 @@ def tree_colors(
     leaf, and coloured text disappears when labels are hidden.
     """
     colours = palette_for(groups.values(), palette)
-    lines = ["TREE_COLORS", f"SEPARATOR{SEPARATOR}TAB", "DATA"]
+    lines = ["TREE_COLORS", SEPARATOR_DECL, "DATA"]
     for pid, group in groups.items():
         if not group:
             continue
@@ -210,7 +219,7 @@ def labels_dataset(names) -> str:
     joins -- this only changes what is drawn, which is why the mapping is built
     once in ``io.annotate`` and reused rather than re-derived here.
     """
-    lines = ["LABELS", f"SEPARATOR{SEPARATOR}TAB", "DATA"]
+    lines = ["LABELS", SEPARATOR_DECL, "DATA"]
     for pid, name in names.items():
         lines.append(_check_label(pid) + SEPARATOR + _check_label(name))
     return "\n".join(lines) + "\n"
@@ -284,7 +293,7 @@ def collapse_clades(nodes) -> str:
     node id, because IQ-TREE's internal node labels are support values and are
     not stable between runs.
     """
-    lines = ["COLLAPSE", f"SEPARATOR{SEPARATOR}TAB", "DATA"]
+    lines = ["COLLAPSE", SEPARATOR_DECL, "DATA"]
     for pair in nodes:
         first, second = pair
         lines.append(_check_label(first) + SEPARATOR + _check_label(second))

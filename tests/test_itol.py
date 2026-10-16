@@ -35,9 +35,27 @@ def test_binary_dataset_has_the_header_itol_requires():
     text = itol.binary_dataset(_presence())
     lines = text.splitlines()
     assert lines[0] == "DATASET_BINARY"
-    assert "SEPARATOR\tTAB" in lines
+    assert "SEPARATOR TAB" in lines
     assert "DATA" in lines
     assert _fields(text, "FIELD_LABELS") == ["blk1", "blk2"]
+
+
+@pytest.mark.parametrize("text", [
+    itol.binary_dataset(pd.DataFrame({"b": [1]}, index=["a"])),
+    itol.tree_colors({"a": "FXR1"}),
+    itol.labels_dataset({"a": "Homo sapiens"}),
+    itol.gradient_dataset({"a": 0.5}),
+    itol.simplebar_dataset({"a": 0.5}),
+    itol.collapse_clades([("a", "b")]),
+])
+def test_the_separator_line_is_space_delimited_in_every_dataset(text):
+    """The one line not written with the separator it declares. iTOL reads it
+    before it knows what the separator is, so a tab there makes the whole
+    upload fail with "separator needed" and nothing else in the file is ever
+    reached. Every writer must get this right, hence the sweep."""
+    line = next(l for l in text.splitlines() if l.startswith("SEPARATOR"))
+    assert line == "SEPARATOR TAB"
+    assert "\t" not in line
 
 
 def test_binary_rows_follow_the_data_line_and_carry_every_column():
@@ -94,7 +112,8 @@ def test_a_dataset_with_no_blocks_is_refused():
 
 def test_tree_colors_emits_a_range_and_a_label_row_per_leaf():
     text = itol.tree_colors({"a": "FXR1", "b": "FMR1"})
-    rows = [l.split("\t") for l in text.splitlines() if "\t" in l][1:]
+    body = text.splitlines()[text.splitlines().index("DATA") + 1:]
+    rows = [l.split("\t") for l in body]
     assert ["a", "range", "#D55E00", "FXR1"] in rows
     assert ["a", "label", "#D55E00"] in rows
     assert ["b", "range", "#0072B2", "FMR1"] in rows

@@ -1,32 +1,18 @@
-fix(phylo): a permutation p of 0 is not a p of 0, and two phyloglm fits were lost
+fix(viz): the SEPARATOR line must not use the separator it declares
 
-The first run with D working returned p(rnd) = 0 on 34 of 37 rows, and the
-report printed it as 0. It is not zero: phylo.d returns the proportion of
-permuted datasets at least as extreme as the observed one, so with 1,000
-permutations the floor is 1/1001 and 0 means "none of the thousand". Printed as
-0 it travels into a manuscript as a claim nothing supports -- the same mistake
-this code already guards against for the likelihood-ratio underflows, missed
-here because the guard keyed on the column name ending in "_p" and these end in
-"_random" and "_brownian". They now print as <0.000999, derived from the
-permutation count rather than hard-coded.
+iTOL rejected every dataset with "separator needed". The files were written as
+`SEPARATOR<tab>TAB`, which looks consistent and is wrong: iTOL has to read that
+line before it knows what the separator is, so the keyword and its value are
+always divided by a single space. That is also why `SEPARATOR SPACE` is a legal
+thing to write. Confirmed against iTOL's own dataset_binary_template.txt rather
+than from memory.
 
-boundary_warnings was conflating the two zeros as well, reporting a permutation
-floor as a double-precision underflow. They are different failures: more
-permutations fix the first and nothing fixes the second, so they now say so
-separately.
+The failure mode is the worst kind available here. The declaration is the first
+thing parsed, so nothing else in the file is ever reached, and the error names a
+missing separator in a file that is otherwise entirely separator-delimited --
+which sends the reader looking at the 357 data rows.
 
-phyloglm: two per-clade fits died with "edge.length[i] is NaN. Please reduce
-btol", which is phylolm telling the caller what to do. It now retries at
-btol = 10 when btol = 50 fails, and records in the note that it did -- the two
-fits are not interchangeable and a reader should know which one produced the
-coefficient.
+All five writers had it. The test sweeps every one of them rather than checking
+a single dataset, since this is a constant that any new writer would copy.
 
-Also worth recording from that run, since it contradicts something this file
-warned about: phyloglm's own alphaWarn came back 0 for all 35 fits that
-reported it. The alpha of 1.51447 shared to six figures across the whole-tree
-fits is therefore NOT a search bound -- it is alpha being determined by the
-tree, which is the same tree for every block, with `length` barely shifting it.
-The tie-based heuristic stays, because it is right to look twice at fifteen
-identical estimates, but alphaWarn is the authority and the warning says so.
-
-300 tests passing.
+306 tests passing.
