@@ -104,7 +104,8 @@ def merge_intervals(intervals) -> list[Block]:
 
 
 def occupancy(
-    column_masks: dict[str, np.ndarray], members, n_columns: int
+    column_masks: dict[str, np.ndarray], members, n_columns: int,
+    *, weights=None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Per-column APR occupancy and coverage over ``members``.
 
@@ -114,19 +115,39 @@ def occupancy(
     members present at it. Occupancy is over members present, so a column in an
     insertion is not diluted by the sequences that lack it -- which is also why
     ``coverage`` has to be reported alongside and gated on.
+
+    ``weights`` maps sequence id to a weight, from ``conserve.weights``. This
+    is the ONE place in the package where sequences are summed, so it is the
+    one place redundancy can be corrected; everything downstream inherits it.
+    A member missing from the mapping weighs 1, so a partial mapping
+    under-corrects rather than silently dropping sequences. With no weights the
+    arithmetic is identical to before, not merely equivalent -- the unweighted
+    run must stay exactly reproducible for the two to be comparable.
     """
     members = [m for m in members if m in column_masks]
     if not members:
         return np.zeros(n_columns), np.zeros(n_columns)
     calls = np.zeros(n_columns, dtype=float)
     present = np.zeros(n_columns, dtype=float)
+    total = 0.0
     for pid in members:
+        weight = 1.0 if weights is None else float(weights.get(pid, 1.0))
         mask = np.asarray(column_masks[pid], dtype=bool)
-        calls[: mask.size] += mask
-        present[: mask.size] += 1.0
+        calls[: mask.size] += mask * weight
+        present[: mask.size] += weight
+        total += weight
+    # The zero guard divides by `present` where it is positive and by 1 only
+    # where the numerator is zero anyway. `np.maximum(present, 1.0)` was safe
+    # while `present` was an integer count of sequences and is not safe for
+    # fractional weights: it clamps every denominator below 1, so a group whose
+    # weights sum to 0.02 came out at occupancy 0.02 instead of 1.0. That
+    # deflation looks exactly like the correction working -- blocks dropping
+    # out under weighting is the expected result -- so it could have been
+    # reported as a finding. Hence the scale-invariance test.
+    safe = np.where(present > 0, present, 1.0)
     with np.errstate(invalid="ignore", divide="ignore"):
-        occ = np.where(present > 0, calls / np.maximum(present, 1.0), 0.0)
-    return occ, present / len(members)
+        occ = np.where(present > 0, calls / safe, 0.0)
+    return occ, present / (total if total > 0 else 1.0)
 
 
 def blocks_from_occupancy(
@@ -176,19 +197,27 @@ def define_blocks(
     min_width: int = DEFINE_MIN_WIDTH,
     max_gap: int = DEFINE_MAX_GAP,
     min_group: int = DEFINE_MIN_GROUP,
+    weights=None,
 ) -> list[Block]:
     """Union of the blocks each group defines on its own.
 
     Pass ``{"all": [...]}`` for an ungrouped set; the behaviour is then the
     pooled definition, which is the right one when there are no groups and the
     wrong one when there are.
+
+    ``weights`` is passed through to :func:`occupancy`. Note what it does and
+    does not touch: the thresholds decide on weighted occupancy, so the block
+    LIST changes, while ``min_group`` still counts sequences, since a group of
+    five near-identical sequences is still five sequences and defining blocks
+    from it is a sample-size question rather than a redundancy one.
     """
     found: list[tuple[int, int]] = []
     for members in members_by_group.values():
         usable = [m for m in members if m in column_masks]
         if len(usable) < min_group:
             continue
-        occ, cov = occupancy(column_masks, usable, n_columns)
+        occ, cov = occupancy(column_masks, usable, n_columns,
+                             weights=weights)
         found += [
             (b.start, b.stop)
             for b in blocks_from_occupancy(
@@ -222,12 +251,18 @@ def group_occupancy(
     column_masks: dict[str, np.ndarray],
     blocks,
     members_by_group: dict[str, list[str]],
+    *,
+    weights=None,
 ) -> "object":
     """Per-group mean occupancy of each block, as a DataFrame.
 
     One row per block with an ``occ_<group>`` column per group -- the shape
     :func:`amyloevo.viz.groups.plot_block_occupancy` draws, and the table that
     answers "what is shared and what is private".
+
+    With ``weights`` the per-group figure is a weighted mean, so a group's
+    occupancy stops being dominated by whichever lineage happens to be sampled
+    most densely inside it. 80 of the 116 FXR1 sequences are mammals.
     """
     import pandas as pd
 
@@ -244,5 +279,13 @@ def group_occupancy(
             data[f"occ_{group}"] = [float("nan")] * len(blocks)
             continue
         profiles = block_profiles(column_masks, blocks, usable)
-        data[f"occ_{group}"] = profiles.mean(axis=0).tolist()
+        if weights is None:
+            data[f"occ_{group}"] = profiles.mean(axis=0).tolist()
+        else:
+            w = np.array([float(weights.get(m, 1.0)) for m in usable])
+            total = w.sum()
+            data[f"occ_{group}"] = (
+                (profiles * w[:, None]).sum(axis=0) / total
+                if total > 0 else profiles.mean(axis=0)
+            ).tolist()
     return pd.DataFrame(data)

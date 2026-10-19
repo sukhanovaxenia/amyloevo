@@ -1,51 +1,44 @@
-feat(viz): taxonomic tracks for iTOL, and a rooting that actually realised the split
+feat(conserve): sequence weights, and the zero-guard that silently deflated them
 
-Two tracks were missing and one bug was hiding behind a check that passed.
+An orthologue set is not a sample of independent sequences. The FXR1 family is
+372 sequences over 66 orders of which 217 are mammals; weight every order
+equally and the effective sample size is 147, by Henikoff 83. Every per-column
+quantity in this package counted those 217 as 217 observations, so a block
+carried by densely sampled mammals and nobody else cleared a family-level
+threshold it had no business clearing. The config has had `redundancy.method`
+since the beginning and nothing implemented it.
 
-TAXONOMY. `io.annotate.major_groups` collapses a kingdom-spanning taxonomy into
-groups a legend can hold. Neither rank works alone on this set: `class` gives 25
-values of which 11 have under three members, `phylum` gives 12 but puts every
-vertebrate in one bucket. So ranks are tried finest to coarsest and a group is
-kept the first time it reaches min_size -- with the remainder RE-COUNTED among
-itself, which is the part that matters. Falling back to phylum for three
-coelacanths must not produce "Chordata", a name already covering the 217 mammals
-assigned a rank earlier; counting only what is still unassigned turns it into
-"Chordata (other)" and the suffix says so. The FXR1 set yields nine groups.
+`conserve.weights` offers three schemes and states that none of them is
+objective: uniform (the baseline to compare against), by_rank (equal total
+weight per taxonomic level -- transparent, and crude, since orders are not of
+equal depth), and henikoff (position-based from the alignment, needing no tree,
+which matters because a tree-based weight would be derived from the same gene
+tree inferred from the same biased sample). All three normalise to mean 1 so a
+threshold keeps the meaning it has unweighted and the runs stay comparable.
 
-Those go out as DATASET_SYMBOL (a shape per group, in an external column) and
-DATASET_COLORSTRIP (the same as a band). Not as clade ranges, and that is a
-statement about gene trees rather than a shortcut: a taxonomic group appears
-once inside EACH paralogue clade, so "Mammalia" is not a clade and the MRCA of
-its 206 tips is very nearly the whole tree. `category_styles` varies shape
-before colour, so the first six groups differ in both -- shape survives
-greyscale and colour blindness, colour alone does not.
+Weights enter at `blocks.occupancy`, the one place in the package where
+sequences are summed, and `define_blocks` and `group_occupancy` pass them
+through. Nothing else moves: the alignment is untouched, no sequence is
+dropped, and `block_profiles` stays per-sequence, since weighting an
+individual's own profile would be meaningless and the per-clade analyses read
+it. What changes is which columns clear the threshold, which is the correction
+working.
 
-PARALOGUE CLADES now draw as ONE range each at their MRCA, via
-`phylo.tree.mrca_pair`, which names an internal node the way iTOL does: two
-leaves joined by a bar. 357 per-leaf ranges paint 357 thin stripes and hide
-where a clade starts; four ranges paint four blocks. mrca_pair returns None for
-a group that is not a clade rather than approximating one, and the per-leaf form
-stays as the fallback.
+THE BUG, found by a test rather than by reading. The divide-by-zero guard in
+`occupancy` was `calls / np.maximum(present, 1.0)`. That is correct while
+`present` is an integer count of sequences and wrong for fractional weights: it
+clamps every denominator below 1, so a group whose weights summed to 0.02 came
+back at occupancy 0.02 instead of 1.0. Blocks then vanished under weighting --
+which is exactly what a working correction also does, so the deflation would
+have read as a result and been reported as one. The guard now divides by
+`present` where it is positive and by 1 only where the numerator is zero
+anyway, and a parametrised test pins scale invariance: occupancy is a ratio, so
+multiplying every weight by a constant must not move it.
 
-THE BUG. Building those ranges is what exposed it. `root_on_outgroup` reported
-the 57-tip outgroup monophyletic -- correctly, it is one side of a valid split --
-and then produced a tree whose root separated 2 tips from 355. Biopython roots
-AT the MRCA of its targets, and on a tree IQ-TREE wrote as a trifurcation the
-outgroup spans the root, so its MRCA is the whole tree and rooting there
-scatters it. The fix roots on whichever side is actually a clade, the outgroup
-or its complement, and then VERIFIES that the root separates the two sets
-instead of trusting that it did.
+Verified on the real data: with no weights the output is byte-identical to the
+previous run (same md5 on apr_blocks_amyloevo.tsv), which is the precondition
+for the two runs being comparable at all. Under order-weighting 14 of 15 blocks
+survive -- 11 identical in extent, 3 shifted by a column or two, one lost that
+only the invertebrates carried.
 
-The published D and lambda are unaffected: the R side re-roots independently
-with ape::root(resolve.root = TRUE), which gets this right, and the per-clade
-subtrees are taken by keep.tip. What was wrong was the Python-side tree used for
-clade checks and, now, for clade ranges -- where pre-duplication came back "not
-monophyletic" one line after the rooting had called it monophyletic. That
-contradiction is what a verification step is for.
-
-Also documented, because it is silent: viz.groups.colour_for assigns the palette
-by position in the SORTED group names, so a dataset built from a subset of the
-groups comes out in colours that do not match the figures. Sharing the function
-is necessary and not sufficient; callers must pass every group.
-
-322 tests passing.
+23 new tests, 345 passing.
