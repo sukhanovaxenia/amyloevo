@@ -1,40 +1,73 @@
-refactor(viz): remove the one dataset-specific palette from the package
+feat(phylo,viz): relative divergence rates, and a display rank chosen by budget
 
-amyloevo is a general package, and it had one study's group names written into
-its code in four places that actually ran:
+Two modules, both answering questions the package could previously only be
+asked informally.
 
-    src/amyloevo/viz/itol.py
-        GROUP_PALETTE = colour_for(["FXR1", "FMR1", "FXR2",
-        "pre-duplication"]) -- module level, and exported in __all__
+phylo/rates.py -- relative divergence rate between clades.
 
-    workflow/scripts/itol_annotations.py
-        palette.get("FXR1", "#D55E00") -- three times, picking the accent
-        colour for the block-presence, gradient and bar tracks
+Measured crown-to-tip, not root-to-tip, and that is the whole design. From the
+root every path carries its clade's stem branch, which is one number shared by
+every taxon in that clade; it would enter every paired difference as a constant
+and read as a rate difference it is not. Measured from each clade's own crown
+the comparison is between within-clade path lengths for the same species, which
+is what a relative-rate statement is about. Stem lengths are reported
+separately, since the branch over which a paralogue diverged after the
+duplication is a quantity of interest rather than a nuisance. The regression
+test changes the stems from 0.5/0.3 to 2.0/0.01 and asserts that nothing about
+the rates moves.
 
-GROUP_PALETTE was never read by any function in the package: only exported and
-asserted in tests. palette_for() already serves every caller by computing the
-palette from the groups it is handed, so the constant was convenience with a
-dataset baked in. Removed, with a test asserting it stays removed -- a
-convenience constant is exactly the kind of thing that creeps back.
+The comparison is paired within taxon, for the reason the project already
+pairs the APR load: tips inside a clade share branches, so a clade mean is not
+an average of independent observations and a difference between two clade means
+has no standard error that treats it as one. Where one taxon carries a sequence
+in two clades the species history below the duplication is shared, so the
+paired difference isolates the paralogue. Clade means are still reported,
+labelled descriptive, with the reason no test compares them directly.
 
-The three lookups in the workflow script become ACCENT, the head of the shared
-Okabe-Ito cycle. That is a correction and not just a rename: those three
-tracks carry block presence and mean block occupancy, which are quantities
-rather than groups, so painting them in one paralogue's colour invites the
-reader to think the track is about that paralogue.
+Tests are sign-flip permutations on the paired differences rather than Wilcoxon,
+and no dependency was added to get the latter: ranking the differences would
+discard their magnitude, and the permutation floor is already a convention here.
+MIN_PAIRS = 10 is about attainable resolution and not about normality -- a
+sign-flip test over n pairs has 2**n assignments, so at four taxa the smallest
+reachable p is 2/16 however large the effect. A test pins exactly that: clade B
+at twice clade A's rate, every paired difference identical, p still 0.125.
 
-The tests that pinned hex values to FXR1/FMR1/FXR2 now use Alpha/Beta/Gamma/
-Delta. What they verify is that palette_for delegates to viz.groups.colour_for
--- not that one dataset comes out a particular colour, which is a fact about
-the dataset and belongs with it.
+On dating, the module's first draft said absolute ages were unavailable because
+a gene family has no fossils. That is wrong where the paralogues are ohnologs:
+the duplication node IS the whole-genome duplication, which was dated without
+reference to the family, so it is a real external calibration. DATING_CAVEATS
+now says so, and says what still bites -- two WGD rounds leave two duplication
+nodes at different depths, a calibration on the wrong one is wrong by the
+interval between the rounds, and a rate over substitutions per site is a rate
+over the sites that aligned.
 
-Swept for what else ran on those names: nothing. config/config.yaml still
-carries reference.value "9606", which is a configured setting with a
-documented default and the right place for a dataset specific.
+viz/represent.py -- one representative per taxonomic level, at whichever rank
+fits a row budget.
 
-NOT changed here: sixteen modules still cite the FMR1/FXR1/FXR2 family in
-docstrings, as the worked example a constant was chosen against. No code
-branches on any of it. Whether that prose should be genericised is a separate
-decision and a separate commit.
+The rank is found from the data rather than declared, because on an orthologue
+set the obvious choice is the wrong one. A genus contributes about one sequence
+per paralogue, so one representative per genus cuts the pooled set by two
+thirds and a single paralogue group by under a fifth -- and a per-group figure
+only ever sees the second number. Measured on the FXR1 family: genus takes FXR1
+from 116 rows to 96, still twice a readable panel, while order takes it to 42.
+choose_rank walks finest to coarsest and stops at the first rank inside the
+budget, so a scope gets the most resolution it can afford; a test asserts that
+the same metadata yields genus for one group and family for the pooled set.
 
-348 tests pass.
+Three refusals, each of them a way the function could otherwise mislead
+quietly. Nothing is dropped to meet an impossible budget, because choosing
+which clades a figure omits is not a decision a row count can make. A rank with
+more levels than the finer rank above it does not nest -- one genus filed under
+two families -- and is reported instead of used. Sequences with no value at the
+rank are pooled rather than dropped, since dropping them removes whichever
+clade the taxonomy is worst for, which on this family is the invertebrates.
+
+The representative is chosen by alignment completeness and never by anything
+the figure displays; picking by APR content or by support would make the panel
+select on its own variable and look cleaner than the data in a way the reader
+cannot see. format_selection_report prints the column used as a caption line so
+the figure carries it, and reports how many levels were decided by the
+tie-break, which is the honest measure of how arbitrary the panel is.
+
+Not done here: neither module is wired into workflow/, and the logo step is
+still a stub. 32 new tests, 380 pass.
