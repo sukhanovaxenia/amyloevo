@@ -141,27 +141,44 @@ def summarise(weights: dict[str, float], metadata=None, rank: str = "order") -> 
     equally weighted sequences carrying the same information. Quoting it beside
     the raw count is the honest way to report a weighted analysis: 372
     sequences at an effective 147 is a different claim from 372 sequences.
+
+    The per-level totals need one guard. Under :func:`by_rank` at the same
+    rank, every level sums to ``n / k`` by construction, so a list of the five
+    heaviest levels is the same number printed five times and reads as a
+    ranking that is not there. That case is named instead of listed.
     """
     if not weights:
         return "no weights"
     w = np.array(list(weights.values()), dtype=float)
     ess = w.sum() ** 2 / (w ** 2).sum()
+    heaviest = max(weights.items(), key=lambda kv: kv[1])
     lines = [
         f"{len(w)} sequence(s); weights mean {w.mean():.3f}, "
         f"range {w.min():.3f}-{w.max():.3f}",
         f"effective sample size {ess:.1f} "
         f"({ess / len(w):.0%} of the raw count)",
+        f"heaviest single sequence {heaviest[0]} at {heaviest[1]:.2f}, "
+        f"{heaviest[1] / w.sum():.1%} of all weight",
     ]
     if metadata is not None and rank in getattr(metadata, "columns", []):
         by_level: dict[str, float] = {}
         for pid, level in zip(metadata["id"], metadata[rank]):
             key = str(level) if level and str(level).strip() else "(unresolved)"
             by_level[key] = by_level.get(key, 0.0) + weights.get(str(pid), 0.0)
-        top = sorted(by_level.items(), key=lambda kv: -kv[1])[:5]
-        lines.append(
-            f"heaviest {rank}s: " + ", ".join(
-                f"{k} {v:.1f}" for k, v in top)
-        )
+        totals = np.array(list(by_level.values()), dtype=float)
+        spread = (totals.max() - totals.min()) / totals.mean() if totals.mean() else 0.0
+        if spread < 1e-6:
+            lines.append(
+                f"weight per {rank} is equal by construction: "
+                f"{totals.mean():.2f} each across {len(by_level)} {rank}s, so "
+                f"there is no ranking of {rank}s to read here"
+            )
+        else:
+            top = sorted(by_level.items(), key=lambda kv: -kv[1])[:5]
+            lines.append(
+                f"heaviest {rank}s (share of total weight): " + ", ".join(
+                    f"{k} {v / totals.sum():.1%}" for k, v in top)
+            )
     return "\n".join(lines)
 
 

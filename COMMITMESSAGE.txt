@@ -1,44 +1,24 @@
-feat(conserve): sequence weights, and the zero-guard that silently deflated them
+fix(conserve): a per-level weight ranking that was one number five times
 
-An orthologue set is not a sample of independent sequences. The FXR1 family is
-372 sequences over 66 orders of which 217 are mammals; weight every order
-equally and the effective sample size is 147, by Henikoff 83. Every per-column
-quantity in this package counted those 217 as 217 observations, so a block
-carried by densely sampled mammals and nobody else cleared a family-level
-threshold it had no business clearing. The config has had `redundancy.method`
-since the beginning and nothing implemented it.
+summarise() sums weights per taxonomic level and printed the five heaviest.
+Under by_rank at that same rank every level sums to n/k by construction, so
+the list was 5.64 printed five times under five different order names, read
+as a ranking of orders when there was nothing to rank. On the FXR1 set it
+announced Cichliformes, Chiroptera, Carnivora, Diptera and Rodentia as the
+"heaviest orders" -- which invites precisely the wrong conclusion about which
+clades the weighting favours, since by_rank(order) favours the SMALLEST
+orders and those five are simply the first five of sixty-six equal totals.
 
-`conserve.weights` offers three schemes and states that none of them is
-objective: uniform (the baseline to compare against), by_rank (equal total
-weight per taxonomic level -- transparent, and crude, since orders are not of
-equal depth), and henikoff (position-based from the alignment, needing no tree,
-which matters because a tree-based weight would be derived from the same gene
-tree inferred from the same biased sample). All three normalise to mean 1 so a
-threshold keeps the meaning it has unweighted and the runs stay comparable.
+The degenerate case is now named instead of listed, and the real ranking
+branch reports a share of the total weight rather than a bare sum, so the two
+schemes' output is comparable side by side. Added the heaviest single sequence
+and its share of the total: on the FXR1 set Henikoff puts 7.4% of all weight
+on one sequence, which is the number a reader needs in order to distrust it.
 
-Weights enter at `blocks.occupancy`, the one place in the package where
-sequences are summed, and `define_blocks` and `group_occupancy` pass them
-through. Nothing else moves: the alignment is untouched, no sequence is
-dropped, and `block_profiles` stays per-sequence, since weighting an
-individual's own profile would be meaningless and the per-clade analyses read
-it. What changes is which columns clear the threshold, which is the correction
-working.
+Three tests. One of them needed its fixture rewritten before it could fail at
+all: under Henikoff three identical rodents collectively weigh exactly what
+one fly does, so a 3-vs-1 split comes out equal per order and would have
+passed whatever summarise() printed. Unequal numbers of DISTINCT sequences
+per level is what makes the ranking branch reachable.
 
-THE BUG, found by a test rather than by reading. The divide-by-zero guard in
-`occupancy` was `calls / np.maximum(present, 1.0)`. That is correct while
-`present` is an integer count of sequences and wrong for fractional weights: it
-clamps every denominator below 1, so a group whose weights summed to 0.02 came
-back at occupancy 0.02 instead of 1.0. Blocks then vanished under weighting --
-which is exactly what a working correction also does, so the deflation would
-have read as a result and been reported as one. The guard now divides by
-`present` where it is positive and by 1 only where the numerator is zero
-anyway, and a parametrised test pins scale invariance: occupancy is a ratio, so
-multiplying every weight by a constant must not move it.
-
-Verified on the real data: with no weights the output is byte-identical to the
-previous run (same md5 on apr_blocks_amyloevo.tsv), which is the precondition
-for the two runs being comparable at all. Under order-weighting 14 of 15 blocks
-survive -- 11 identical in extent, 3 shifted by a column or two, one lost that
-only the invertebrates carried.
-
-23 new tests, 345 passing.
+348 tests pass.

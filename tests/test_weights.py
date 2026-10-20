@@ -79,6 +79,51 @@ def test_summarise_reports_the_effective_sample_size():
     assert "4 sequence(s)" in text
 
 
+def test_summarise_names_the_heaviest_single_sequence_and_its_share():
+    """A scheme can put a large share of the total weight on one sequence, and
+    that is the number a reader needs in order to distrust the result."""
+    text = weights.summarise(weights.henikoff(_triplicate()))
+    assert "heaviest single sequence d" in text
+    assert "% of all weight" in text
+
+
+def test_summarise_refuses_to_rank_levels_that_are_equal_by_construction():
+    """by_rank at the same rank gives every level n/k, so a list of the five
+    heaviest levels is one number printed five times. Printed as a ranking it
+    reads as a finding about those levels, which is the failure here."""
+    frame = pd.DataFrame({
+        "id": ["r1", "r2", "r3", "r4", "d1", "s1"],
+        "order": ["Rodentia"] * 4 + ["Diptera", "Spongiida"],
+    })
+    text = weights.summarise(weights.by_rank(frame, "order"), frame, "order")
+    assert "equal by construction" in text
+    assert "3 orders" in text
+    assert "heaviest orders" not in text
+
+
+def test_summarise_ranks_levels_when_the_totals_actually_differ():
+    """Henikoff totals per order are not fixed, so there the ranking is real
+    and is reported as a share of the total rather than a bare sum.
+
+    The fixture needs unequal numbers of DISTINCT sequences per order, not
+    unequal counts: three identical rodents collectively weigh what one fly
+    does, so 3-vs-1 would come out equal and prove nothing.
+    """
+    aln = {"r1": "MKVLLAA", "r2": "MKVLLAA", "r3": "MKVLLAA",
+           "d1": "QQWEERT", "d2": "YYHHIIP"}
+    frame = pd.DataFrame({"id": ["r1", "r2", "r3", "d1", "d2"],
+                          "order": ["Rodentia"] * 3 + ["Diptera"] * 2})
+    w = weights.henikoff(aln)
+    text = weights.summarise(w, frame, "order")
+    assert "heaviest orders (share of total weight)" in text
+    assert text.rsplit("heaviest orders (share of total weight): ", 1)[1] \
+        .startswith("Diptera ")
+    assert "equal by construction" not in text
+    # two distinct flies against one effective rodent
+    diptera = (w["d1"] + w["d2"]) / sum(w.values())
+    assert diptera == pytest.approx(2 / 3, abs=0.05)
+
+
 # --- what weighting may and may not change ---------------------------------
 
 
