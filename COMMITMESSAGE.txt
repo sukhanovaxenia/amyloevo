@@ -69,5 +69,18 @@ cannot see. format_selection_report prints the column used as a caption line so
 the figure carries it, and reports how many levels were decided by the
 tie-break, which is the honest measure of how arbitrary the panel is.
 
+dating_command now takes the result of dating_inputs() as a required argument
+and refuses to emit a command when it does not pass. The first version took
+two paths and trusted them, and the command it produced paired the
+372-sequence alignment with the 357-tip tree -- a mismatch IQ-TREE reports
+only after reading and analysing both files, several hundred lines into a run.
+The cause is structural rather than careless: the tree is inferred from a copy
+of the alignment filtered at MIN_TIP_OCCUPANCY, and that filtered copy is
+never written out, so the two files a pipeline naturally hands you are exactly
+the two that disagree. dating_inputs names the difference in both directions
+and says which cause each one implies; matched_alignment builds the subset the
+tree carries, leaving columns alone, since trimming all-gap columns would
+renumber every block coordinate the project reports against.
+
 Not done here: neither module is wired into workflow/, and the logo step is
-still a stub. 32 new tests, 380 pass.
+still a stub. 37 new tests, 385 pass.

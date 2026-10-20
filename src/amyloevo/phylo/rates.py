@@ -310,18 +310,116 @@ def report(tree, membership, taxon_of, *, permutations: int = PERMUTATIONS,
     )
 
 
-def dating_command(tree_path, alignment_path, *, dates_path=None,
-                   outgroup=None, threads: int = 4) -> str:
-    """The IQ-TREE 2 least-squares dating call, with its own caveats attached.
+@dataclass
+class DatingInputs:
+    """Whether an alignment and a tree describe the same sequences."""
 
-    LSD2 rather than a Bayesian relaxed clock, and not as a compromise: with no
-    calibrations the two differ in the width of an interval around a number
-    neither of them measured. What LSD2 does give, cheaply, is relative node
-    ordering and a rate estimate on the branches, and `--date-ci` gives it a
-    confidence interval from resampling rather than from a prior.
+    shared: list[str] = field(default_factory=list)
+    tree_only: list[str] = field(default_factory=list)
+    alignment_only: list[str] = field(default_factory=list)
+
+    @property
+    def ready(self) -> bool:
+        return not self.tree_only and not self.alignment_only
+
+    def message(self) -> str:
+        if self.ready:
+            return (f"alignment and tree agree on all {len(self.shared)} "
+                    f"sequence(s)")
+        lines = [
+            f"alignment and tree do NOT describe the same sequences: "
+            f"{len(self.shared)} shared, "
+            f"{len(self.alignment_only)} in the alignment only, "
+            f"{len(self.tree_only)} on the tree only."
+        ]
+        if self.alignment_only:
+            lines.append(
+                "  in the alignment, absent from the tree: "
+                + ", ".join(self.alignment_only[:6])
+                + (f" ... (+{len(self.alignment_only) - 6})"
+                   if len(self.alignment_only) > 6 else "")
+            )
+            lines.append(
+                "  The usual cause is the occupancy filter: the tree was "
+                "inferred after dropping\n  sequences below "
+                "MIN_TIP_OCCUPANCY, and the unfiltered alignment still "
+                "carries them.\n  Build the matching alignment with "
+                "matched_alignment() rather than re-running the tree."
+            )
+        if self.tree_only:
+            lines.append(
+                "  on the tree, absent from the alignment: "
+                + ", ".join(self.tree_only[:6])
+                + (f" ... (+{len(self.tree_only) - 6})"
+                   if len(self.tree_only) > 6 else "")
+            )
+            lines.append(
+                "  That direction is worse: the tree has tips the alignment "
+                "cannot explain, so\n  the two came from different runs."
+            )
+        return "\n".join(lines)
+
+
+def dating_inputs(tree, alignment) -> DatingInputs:
+    """Compare a tree's tip labels with an alignment's identifiers.
+
+    This exists because the mismatch is otherwise found by IQ-TREE, several
+    hundred lines into a run, after it has read and analysed the whole
+    alignment -- and because the two files that mismatch are exactly the two a
+    pipeline naturally hands you: the alignment it aligned, and the tree it
+    inferred from a filtered copy of that alignment it never wrote out.
     """
+    tips = [t.name for t in tree.get_terminals() if t.name]
+    tip_set, align_set = set(tips), {str(k) for k in alignment}
+    return DatingInputs(
+        shared=sorted(tip_set & align_set),
+        tree_only=sorted(tip_set - align_set),
+        alignment_only=sorted(align_set - tip_set),
+    )
+
+
+def matched_alignment(tree, alignment) -> dict[str, str]:
+    """``alignment`` reduced to the sequences the tree actually carries.
+
+    Columns are left alone. Dropping sequences can leave a column all-gap,
+    which some tools object to, but removing those columns would change the
+    coordinates every block and APR position in the project is reported
+    against -- a worse trade than an empty column.
+    """
+    tips = [t.name for t in tree.get_terminals() if t.name]
+    return {t: str(alignment[t]) for t in tips if t in alignment}
+
+
+def dating_command(tree_path, alignment_path, inputs: DatingInputs, *,
+                   dates_path=None, outgroup=None, threads: int = 4,
+                   binary: str = "iqtree2") -> str:
+    """The IQ-TREE least-squares dating call, with its own caveats attached.
+
+    LSD2 rather than a Bayesian relaxed clock, and not as a compromise: the two
+    differ in the width of an interval around a number that, without a
+    calibration, neither of them measured. What LSD2 gives cheaply is relative
+    node ordering and a per-branch rate, and ``--date-ci`` gives it an interval
+    from resampling rather than from a prior.
+
+    ``inputs`` is required, and the command is refused when it does not pass.
+    An earlier version of this function took the two paths and trusted them,
+    which produced a command pairing a 372-sequence alignment with a
+    357-tip tree -- a combination IQ-TREE rejects only after reading both. A
+    builder that cannot check its arguments should not be asked to.
+    """
+    if not isinstance(inputs, DatingInputs):
+        raise TypeError(
+            "dating_command needs the result of dating_inputs(tree, "
+            "alignment); it will not emit a command for files it has not "
+            "been told agree."
+        )
+    if not inputs.ready:
+        raise ValueError(
+            "refusing to build a dating command for an alignment and a tree "
+            "that disagree.\n" + inputs.message()
+        )
     parts = [
-        "iqtree2",
+        binary,
         f"-s {alignment_path}",
         f"-te {tree_path}",
         "--date TAXNAME" if dates_path is None else f"--date {dates_path}",
@@ -439,6 +537,7 @@ def format_rate_report(result: RateReport, adjusted=None) -> str:
 __all__ = [
     "CladeRates",
     "DATING_CAVEATS",
+    "DatingInputs",
     "MIN_PAIRS",
     "PERMUTATIONS",
     "PairedTest",
@@ -447,7 +546,9 @@ __all__ = [
     "adjust",
     "crown_to_tip",
     "dating_command",
+    "dating_inputs",
     "format_rate_report",
+    "matched_alignment",
     "paired_frame",
     "paired_tests",
     "per_clade",

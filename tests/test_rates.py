@@ -235,7 +235,56 @@ def test_report_names_the_duplication_calibration_and_the_zero_branches():
     assert "ratio" in text
 
 
+#: An alignment carrying two sequences the tree does not: exactly the shape the
+#: occupancy filter produces, since the tree is inferred from a filtered copy
+#: that the pipeline never writes out.
+ALIGNMENT = {f"{c}_t{i}": "MKVL" for c in ("A", "B") for i in (1, 2, 3, 4)}
+ALIGNMENT_PLUS = dict(ALIGNMENT, A_gappy="M---", B_gappy="M---")
+
+
+def test_dating_inputs_names_both_directions_of_a_mismatch():
+    tree = _read(TWO_RATES)
+    inputs = R.dating_inputs(tree, ALIGNMENT_PLUS)
+    assert not inputs.ready
+    assert inputs.alignment_only == ["A_gappy", "B_gappy"]
+    assert inputs.tree_only == []
+    assert "occupancy filter" in inputs.message()
+
+
+def test_dating_inputs_passes_when_the_two_agree():
+    inputs = R.dating_inputs(_read(TWO_RATES), ALIGNMENT)
+    assert inputs.ready
+    assert len(inputs.shared) == 8
+    assert "agree on all 8" in inputs.message()
+
+
+def test_dating_command_refuses_a_mismatched_pair():
+    """The failure this prevents: a command pairing a 372-sequence alignment
+    with a 357-tip tree, which IQ-TREE rejects only after reading both files
+    and several hundred lines of output."""
+    inputs = R.dating_inputs(_read(TWO_RATES), ALIGNMENT_PLUS)
+    with pytest.raises(ValueError, match="do NOT describe the same"):
+        R.dating_command("tree.nwk", "aln.fa", inputs)
+
+
+def test_dating_command_refuses_to_be_called_without_the_check():
+    with pytest.raises(TypeError, match="dating_inputs"):
+        R.dating_command("tree.nwk", "aln.fa", None)
+
+
 def test_dating_command_carries_a_confidence_interval():
-    command = R.dating_command("tree.nwk", "aln.fa", dates_path="dates.txt")
+    inputs = R.dating_inputs(_read(TWO_RATES), ALIGNMENT)
+    command = R.dating_command("tree.nwk", "aln.fa", inputs,
+                               dates_path="dates.txt", binary="iqtree3")
     assert "--date dates.txt" in command
     assert "--date-ci" in command
+    assert command.startswith("iqtree3")
+
+
+def test_matched_alignment_keeps_only_the_tips_and_leaves_columns_alone():
+    """Trimming all-gap columns would renumber every block coordinate the
+    project reports, which is a worse trade than an empty column."""
+    matched = R.matched_alignment(_read(TWO_RATES), ALIGNMENT_PLUS)
+    assert set(matched) == set(ALIGNMENT)
+    assert all(len(seq) == 4 for seq in matched.values())
+    assert R.dating_inputs(_read(TWO_RATES), matched).ready
