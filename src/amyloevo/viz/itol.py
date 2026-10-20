@@ -17,24 +17,18 @@ sequence does not carry the block and -1 means nothing is known about it. A
 sequence that failed the completeness filter has no block profile at all, and
 writing 0 for it would put 75 invented absences on the FXR1 tree.
 
-**The group colours are shared with the figures.** ``GROUP_PALETTE`` is the
-palette ``viz.groups`` and the FXR1 project's figures already use, so a
-paralogue is the same colour on the tree as in every plot beside it. It is the
-Okabe-Ito set, which survives the common forms of colour blindness and
-greyscale printing.
+**The group colours are shared with the figures.** :func:`palette_for`
+delegates to ``viz.groups.colour_for``, the single place a group's colour is
+decided, so a group is the same colour on the tree as in every plot beside it.
+That is the Okabe-Ito set, which survives the common forms of colour blindness
+and greyscale printing. No palette is held here as a constant: a module-level
+dict keyed on one dataset's group names would both tie this package to that
+dataset and drift from ``colour_for`` the first time either changed.
 """
 
 from __future__ import annotations
 
 from .groups import GROUP_COLOURS, colour_for
-
-#: The FXR1 family's colours, for reference and for tests. DERIVED from
-#: ``viz.groups.colour_for`` rather than written out again: that function
-#: assigns the Okabe-Ito cycle by sorted group name, and a second hand-keyed
-#: dict here would agree with it today and drift the first time either changes.
-#: A paralogue being one colour in a figure and another on the tree is the kind
-#: of error a reader cannot see and cannot recover from.
-GROUP_PALETTE = colour_for(["FXR1", "FMR1", "FXR2", "pre-duplication"])
 
 #: iTOL shape codes. 2 is a filled circle, which reads best at 300+ leaves.
 SHAPE_SQUARE, SHAPE_CIRCLE, SHAPE_STAR = 1, 2, 3
@@ -103,10 +97,10 @@ def palette_for(groups, palette=None) -> dict[str, str]:
 
     **Pass every group, not the ones you are drawing.** ``colour_for`` assigns
     the palette by position in the sorted names, so a call with a subset shifts
-    every colour: ``palette_for(["FXR1"])`` is blue, while ``palette_for`` over
-    all four FXR1-family groups makes FXR1 orange, as the figures do. Sharing
-    the function is necessary and not sufficient, and the mismatch is silent --
-    the tree simply comes out in colours that do not match the plots beside it.
+    every colour: a group that is third of four takes the first colour when
+    called on its own. Sharing the function is necessary and not sufficient,
+    and the mismatch is silent -- the tree simply comes out in colours that do
+    not match the plots beside it.
     """
     names = [str(g) for g in dict.fromkeys(groups) if g]
     resolved = colour_for(names)
@@ -470,7 +464,6 @@ __all__ = [
     "CATEGORY_SHAPES",
     "EXTERNAL_COLUMN",
     "GROUP_COLOURS",
-    "GROUP_PALETTE",
     "SEPARATOR_DECL",
     "SHAPE_CHECK",
     "SHAPE_CIRCLE",

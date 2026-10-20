@@ -119,12 +119,17 @@ def test_tree_colors_emits_a_range_and_a_label_row_per_leaf():
     assert ["b", "range", "#0072B2", "FMR1"] in rows
 
 
-def test_the_group_palette_matches_the_figures():
-    """A paralogue must be the same colour on the tree as in every plot beside
-    it, so the palette is shared rather than re-picked here."""
-    assert itol.GROUP_PALETTE["FXR1"] == "#D55E00"
-    assert itol.GROUP_PALETTE["FMR1"] == "#0072B2"
-    assert itol.GROUP_PALETTE["FXR2"] == "#009E73"
+def test_no_dataset_specific_palette_is_exported():
+    """amyloevo is a general package, not one study's analysis.
+
+    A module-level dict keyed on the group names of whichever dataset prompted
+    the module would make it that study's package, and `palette_for` already
+    serves every caller by computing the palette from the groups it is given.
+    This asserts the constant stays gone, since a convenience constant is
+    exactly the kind of thing that creeps back.
+    """
+    assert not hasattr(itol, "GROUP_PALETTE")
+    assert "GROUP_PALETTE" not in itol.__all__
 
 
 def test_an_unknown_group_gets_a_deterministic_colour():
@@ -214,19 +219,22 @@ def test_collapse_takes_two_leaves_per_clade():
 
 def test_the_tree_palette_is_the_figure_palette():
     """Not two palettes that happen to agree: itol.palette_for delegates to
-    viz.groups.colour_for, so a paralogue cannot be one colour in a plot and
-    another on the tree."""
+    viz.groups.colour_for, so a group cannot be one colour in a plot and
+    another on the tree. Checked on names belonging to no particular study, so
+    that the agreement is the mechanism and not a coincidence of one dataset.
+    """
     from amyloevo.viz.groups import colour_for
 
-    names = ["FXR1", "FMR1", "FXR2", "pre-duplication"]
+    names = ["Alpha", "Beta", "Gamma", "Delta"]
     assert itol.palette_for(names) == colour_for(names)
-    assert itol.GROUP_PALETTE == colour_for(names)
 
 
 def test_an_explicit_palette_overrides_the_shared_one():
-    resolved = itol.palette_for(["FXR1", "FMR1"], palette={"FXR1": "#000000"})
-    assert resolved["FXR1"] == "#000000"
-    assert resolved["FMR1"] == itol.GROUP_PALETTE["FMR1"]
+    from amyloevo.viz.groups import colour_for
+
+    resolved = itol.palette_for(["Alpha", "Beta"], palette={"Alpha": "#000000"})
+    assert resolved["Alpha"] == "#000000"
+    assert resolved["Beta"] == colour_for(["Alpha", "Beta"])["Beta"]
 
 
 # --- categorical tracks ----------------------------------------------------

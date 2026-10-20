@@ -1,24 +1,40 @@
-fix(conserve): a per-level weight ranking that was one number five times
+refactor(viz): remove the one dataset-specific palette from the package
 
-summarise() sums weights per taxonomic level and printed the five heaviest.
-Under by_rank at that same rank every level sums to n/k by construction, so
-the list was 5.64 printed five times under five different order names, read
-as a ranking of orders when there was nothing to rank. On the FXR1 set it
-announced Cichliformes, Chiroptera, Carnivora, Diptera and Rodentia as the
-"heaviest orders" -- which invites precisely the wrong conclusion about which
-clades the weighting favours, since by_rank(order) favours the SMALLEST
-orders and those five are simply the first five of sixty-six equal totals.
+amyloevo is a general package, and it had one study's group names written into
+its code in four places that actually ran:
 
-The degenerate case is now named instead of listed, and the real ranking
-branch reports a share of the total weight rather than a bare sum, so the two
-schemes' output is comparable side by side. Added the heaviest single sequence
-and its share of the total: on the FXR1 set Henikoff puts 7.4% of all weight
-on one sequence, which is the number a reader needs in order to distrust it.
+    src/amyloevo/viz/itol.py
+        GROUP_PALETTE = colour_for(["FXR1", "FMR1", "FXR2",
+        "pre-duplication"]) -- module level, and exported in __all__
 
-Three tests. One of them needed its fixture rewritten before it could fail at
-all: under Henikoff three identical rodents collectively weigh exactly what
-one fly does, so a 3-vs-1 split comes out equal per order and would have
-passed whatever summarise() printed. Unequal numbers of DISTINCT sequences
-per level is what makes the ranking branch reachable.
+    workflow/scripts/itol_annotations.py
+        palette.get("FXR1", "#D55E00") -- three times, picking the accent
+        colour for the block-presence, gradient and bar tracks
+
+GROUP_PALETTE was never read by any function in the package: only exported and
+asserted in tests. palette_for() already serves every caller by computing the
+palette from the groups it is handed, so the constant was convenience with a
+dataset baked in. Removed, with a test asserting it stays removed -- a
+convenience constant is exactly the kind of thing that creeps back.
+
+The three lookups in the workflow script become ACCENT, the head of the shared
+Okabe-Ito cycle. That is a correction and not just a rename: those three
+tracks carry block presence and mean block occupancy, which are quantities
+rather than groups, so painting them in one paralogue's colour invites the
+reader to think the track is about that paralogue.
+
+The tests that pinned hex values to FXR1/FMR1/FXR2 now use Alpha/Beta/Gamma/
+Delta. What they verify is that palette_for delegates to viz.groups.colour_for
+-- not that one dataset comes out a particular colour, which is a fact about
+the dataset and belongs with it.
+
+Swept for what else ran on those names: nothing. config/config.yaml still
+carries reference.value "9606", which is a configured setting with a
+documented default and the right place for a dataset specific.
+
+NOT changed here: sixteen modules still cite the FMR1/FXR1/FXR2 family in
+docstrings, as the worked example a constant was chosen against. No code
+branches on any of it. Whether that prose should be genericised is a separate
+decision and a separate commit.
 
 348 tests pass.

@@ -36,6 +36,14 @@ from amyloevo.phylo.tree import mrca_pair, tip_labels  # noqa: E402
 from amyloevo.phylo.tree import read_tree  # noqa: E402
 from amyloevo.viz import itol  # noqa: E402
 
+#: The single accent colour for the one-colour tracks -- block presence, the
+#: occupancy gradient and the occupancy bars. Taken from the head of the shared
+#: Okabe-Ito cycle rather than from any group's entry in the palette. Those
+#: three tracks show a QUANTITY and not a group, so borrowing a group's colour
+#: for them misreads as "this track is about that group", and looking the
+#: colour up by a group name also ties this script to one dataset's groups.
+ACCENT = itol.GROUP_COLOURS[0]
+
 
 def main() -> None:
     out = {k: Path(v) for k, v in dict(snakemake.output).items()}
@@ -74,7 +82,7 @@ def main() -> None:
         itol.binary_dataset(
             frame,
             label=f"APR blocks (occupancy > {threshold:g})",
-            colour=palette.get("FXR1", "#D55E00"),
+            colour=ACCENT,
         ),
         encoding="utf-8",
     )
@@ -124,14 +132,14 @@ def main() -> None:
     out["load"].write_text(
         itol.gradient_dataset(
             load, label="mean block occupancy",
-            colour=palette.get("FXR1", "#D55E00"),
+            colour=ACCENT,
         ),
         encoding="utf-8",
     )
     out["load_bars"].write_text(
         itol.simplebar_dataset(
             load, label="mean block occupancy",
-            colour=palette.get("FXR1", "#D55E00"),
+            colour=ACCENT,
         ),
         encoding="utf-8",
     )
