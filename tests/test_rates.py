@@ -281,6 +281,29 @@ def test_dating_command_carries_a_confidence_interval():
     assert command.startswith("iqtree3")
 
 
+def test_identical_sequences_are_kept_by_default():
+    """Without this IQ-TREE reduces the alignment to unique sequences and then
+    fails against a fixed tree that still carries every tip -- 24 of 357 on
+    this family. And on this data it is a decision about the data: one of the
+    33 groups of identical tips carries different APR traits between its
+    members, so de-duplicating deletes an observation."""
+    inputs = R.dating_inputs(_read(TWO_RATES), ALIGNMENT)
+    assert "--keep-ident" in R.dating_command("t.nwk", "a.fa", inputs)
+    assert "--keep-ident" not in R.dating_command(
+        "t.nwk", "a.fa", inputs, keep_identical=False)
+
+
+def test_the_tree_only_direction_names_de_duplication_as_a_cause():
+    """The message this replaces said the files came from different runs,
+    which is wrong for the case that actually happens: files that agree
+    exactly, and a tool that de-duplicates one of them internally."""
+    tree = _read(TWO_RATES)
+    short = {k: v for k, v in ALIGNMENT.items() if k != "A_t4"}
+    message = R.dating_inputs(tree, short).message()
+    assert "de-duplicated" in message
+    assert "--keep-ident" in message
+
+
 def test_matched_alignment_keeps_only_the_tips_and_leaves_columns_alone():
     """Trimming all-gap columns would renumber every block coordinate the
     project reports, which is a worse trade than an empty column."""

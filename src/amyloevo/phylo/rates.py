@@ -354,8 +354,13 @@ class DatingInputs:
                    if len(self.tree_only) > 6 else "")
             )
             lines.append(
-                "  That direction is worse: the tree has tips the alignment "
-                "cannot explain, so\n  the two came from different runs."
+                "  Two causes give this direction. Either the files come from "
+                "different runs, or\n  the alignment was de-duplicated and "
+                "the tree was not -- identical sequences are\n  one row in a "
+                "unique-sequence alignment and still separate tips on the "
+                "tree.\n  Compare the counts: a difference equal to the "
+                "number of identical sequences is\n  the second case, and "
+                "--keep-ident is the fix rather than pruning the tree."
             )
         return "\n".join(lines)
 
@@ -368,6 +373,14 @@ def dating_inputs(tree, alignment) -> DatingInputs:
     alignment -- and because the two files that mismatch are exactly the two a
     pipeline naturally hands you: the alignment it aligned, and the tree it
     inferred from a filtered copy of that alignment it never wrote out.
+
+    **It passing does not guarantee the run works, and the gap is not
+    fixable here.** This compares what is in the two FILES. IQ-TREE then
+    removes identical sequences from the alignment it analyses -- on this
+    family, 24 of 357 -- and compares the fixed tree against that reduced set,
+    so two files that agree exactly can still fail. Nothing readable from the
+    files predicts it, because the reduction happens inside the tool. That is
+    what ``--keep-ident`` in :func:`dating_command` is for.
     """
     tips = [t.name for t in tree.get_terminals() if t.name]
     tip_set, align_set = set(tips), {str(k) for k in alignment}
@@ -392,7 +405,8 @@ def matched_alignment(tree, alignment) -> dict[str, str]:
 
 def dating_command(tree_path, alignment_path, inputs: DatingInputs, *,
                    dates_path=None, outgroup=None, threads: int = 4,
-                   binary: str = "iqtree2") -> str:
+                   binary: str = "iqtree2", keep_identical: bool = True
+                   ) -> str:
     """The IQ-TREE least-squares dating call, with its own caveats attached.
 
     LSD2 rather than a Bayesian relaxed clock, and not as a compromise: the two
@@ -406,6 +420,15 @@ def dating_command(tree_path, alignment_path, inputs: DatingInputs, *,
     which produced a command pairing a 372-sequence alignment with a
     357-tip tree -- a combination IQ-TREE rejects only after reading both. A
     builder that cannot check its arguments should not be asked to.
+
+    ``keep_identical`` defaults to True, and on this project it is a decision
+    about the data rather than a convenience. IQ-TREE otherwise reduces the
+    alignment to unique sequences, which on this family drops 24 of 357 and
+    then fails against a fixed tree that still has 357 tips. Keeping them is
+    also what the analysis requires: of the 33 groups of identical tips here,
+    one carries DIFFERENT APR traits between its members, so de-duplicating
+    would delete observed variation rather than redundant rows. Pruning the
+    tree to the reduced set would do the same thing less visibly.
     """
     if not isinstance(inputs, DatingInputs):
         raise TypeError(
@@ -428,6 +451,8 @@ def dating_command(tree_path, alignment_path, inputs: DatingInputs, *,
         f"-nt {threads}",
         "--prefix dated",
     ]
+    if keep_identical:
+        parts.append("--keep-ident")
     if outgroup:
         parts.append(f"--date-root {outgroup}")
     return " \\\n    ".join(parts)

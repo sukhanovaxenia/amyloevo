@@ -82,5 +82,23 @@ and says which cause each one implies; matched_alignment builds the subset the
 tree carries, leaving columns alone, since trimming all-gap columns would
 renumber every block coordinate the project reports against.
 
+dating_command also passes --keep-ident by default, and on this project that
+is a decision about the data and not a convenience. IQ-TREE otherwise reduces
+the alignment to unique sequences -- 333 of 357 here -- and then rejects a
+fixed tree that still carries 357 tips, which is a second mismatch with the
+same symptom and a different cause. Keeping them is what the analysis needs
+anyway: of the 33 groups of identical tips on this family, one carries
+different APR traits between its members, so de-duplicating deletes an
+observation rather than a redundant row, and pruning the tree to the reduced
+set would do the same thing less visibly.
+
+That second case also marks the limit of dating_inputs, which the docstring
+now states: it compares the two FILES, and the reduction happens inside the
+tool, so two files that agree exactly can still fail and nothing readable from
+them predicts it. The tree-only branch of the message used to assert the files
+came from different runs; it now names de-duplication as the other cause and
+points at the flag, because the wrong half of that message is the half that
+fires in practice.
+
 Not done here: neither module is wired into workflow/, and the logo step is
-still a stub. 37 new tests, 385 pass.
+still a stub. 39 new tests, 387 pass.
