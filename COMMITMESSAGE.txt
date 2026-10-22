@@ -1,104 +1,131 @@
-feat(phylo,viz): relative divergence rates, and a display rank chosen by budget
+feat(phylo): node calibrations from a dated species tree
 
-Two modules, both answering questions the package could previously only be
-asked informally.
+New module phylo/calibrate.py, prompted by a failure that raised nothing. A
+TimeTree query for 152 species came back as 223 leaves: the species asked for
+were replaced by their subspecies. Apis mellifera arrived as fourteen leaves,
+Ailuropoda melanoleuca as two, and Homo sapiens and Mus musculus were absent
+outright -- which removes the best-dated node in vertebrate biology from the
+calibration set with no error anywhere. 123 of 152 names matched, 100 leaves
+were names nobody asked for, 29 queried names had no leaf at all.
 
-phylo/rates.py -- relative divergence rate between clades.
+So the module's entry point is coverage(), not the date file. It lines a
+species tree's leaves up with the taxa of an analysis, reports both directions
+and counts how many leaves each species arrived with, and says plainly why the
+missing ones matter: a calibration set that lost its oldest nodes still dates
+the tree, and the loss shows up only as a suspiciously tight interval.
 
-Measured crown-to-tip, not root-to-tip, and that is the whole design. From the
-root every path carries its clade's stem branch, which is one number shared by
-every taxon in that clade; it would enter every paired difference as a constant
-and read as a rate difference it is not. Measured from each clade's own crown
-the comparison is between within-clade path lengths for the same species, which
-is what a relative-rate statement is about. Stem lengths are reported
-separately, since the branch over which a paralogue diverged after the
-duplication is a quantity of interest rather than a nuisance. The regression
-test changes the stems from 0.5/0.3 to 2.0/0.01 and asserts that nothing about
-the rates moves.
+Its message was wrong on first contact with the real tree, in the way this
+project's reporting keeps going wrong. Every comparison in Coverage is made on
+binomials, so a species present as thirteen subspecies counts once -- which
+means the species-level numbers are identical before and after the collapse.
+The message reported only those numbers and said the duplicates "were folded
+back", so on 223 leaves it read exactly as it did on 146 and claimed an action
+coverage() does not perform. It now reports the raw leaf count beside the
+species count, states that it only counts and that collapse_subspecies() is
+what acts, and a test asserts that the leaf count is the one figure that moves.
+collapse_subspecies() folds them back by binomial, keeping one leaf per
+species. That loses nothing -- the kept leaf stays at every leaf's distance
+from the root on an ultrametric tree, and a divergence involving the species is
+read above the subspecies clade -- but it does assume the tree IS ultrametric,
+so node_ages() refuses a tree whose root-to-tip distances spread, since a dated
+download is ultrametric by construction and a spread means the file is some
+other export whose ages would be numbers rather than errors.
 
-The comparison is paired within taxon, for the reason the project already
-pairs the APR load: tips inside a clade share branches, so a clade mean is not
-an average of independent observations and a difference between two clade means
-has no standard error that treats it as one. Where one taxon carries a sequence
-in two clades the species history below the duplication is shared, so the
-paired difference isolates the paralogue. Clade means are still reported,
-labelled descriptive, with the reason no test compares them directly.
+The calibrations go on nodes, because the tips carry no time. LSD2's date file
+is built for serially sampled sequences, where time enters from the tips; an
+orthologue set is the other case, every species extant, so a tree with all tips
+at one date has no scale at all. Tips go in at zero via --date-tip 0 and every
+piece of temporal information comes from internal nodes, written as negative
+ages because the axis runs forward.
 
-Tests are sign-flip permutations on the paired differences rather than Wilcoxon,
-and no dependency was added to get the latter: ranking the differences would
-discard their magnitude, and the permutation floor is already a convention here.
-MIN_PAIRS = 10 is about attainable resolution and not about normality -- a
-sign-flip test over n pairs has 2**n assignments, so at four taxa the smallest
-reachable p is 2/16 however large the effect. A test pins exactly that: clade B
-at twice clade A's rate, every paired difference identical, p still 0.125.
+Which nodes: speciations inside the paralogue clades, never the duplication.
+Calibrating the duplication with a whole-genome-duplication date and then
+reporting the duplication's date is circular. A dated species tree estimates
+the speciations independently of this family, and the duplication nodes have no
+counterpart in a species tree at all -- a duplication is not a speciation -- so
+their ages come out as results. That asymmetry is the argument for doing it
+this way round and it is what makes a later comparison against the WGD
+literature a check rather than an echo. format_report() says which side of that
+line each number is on, because it is the first question a reader has.
 
-On dating, the module's first draft said absolute ages were unavailable because
-a gene family has no fossils. That is wrong where the paralogues are ohnologs:
-the duplication node IS the whole-genome duplication, which was dated without
-reference to the family, so it is a real external calibration. DATING_CAVEATS
-now says so, and says what still bites -- two WGD rounds leave two duplication
-nodes at different depths, a calibration on the wrong one is wrong by the
-interval between the rounds, and a rate over substitutions per site is a rate
-over the sites that aligned.
+One speciation yields up to one calibration per paralogue, since each species
+appears once in each clade and all of them carry the same age -- more
+constraints for least squares, provided each lands on the node intended.
+calibrations() verifies that through phylo.tree.mrca_pair rather than assuming
+it, and a test pins the consequence: a clade whose internal topology disagrees
+with the species tree keeps only its own crown, while an agreeing clade keeps
+every node. The surviving count is therefore a measure of agreement between the
+two trees, and the gap between those two numbers is what a constraint tree buys.
 
-viz/represent.py -- one representative per taxonomic level, at whichever rank
-fits a row budget.
+A second reporting fault, found the same way -- on the real tree, by its
+output being read. calibrations() took each species-tree node's own age for
+whatever gene tips a clade contributed, but a node's age is the divergence of
+ALL its descendants and a paralogue clade rarely carries all of them: a
+vertebrate clade carries no sponges. So the species-tree root handed its 892
+Myr to every clade, and the per-clade maximum came out equal to the depth of
+the whole species tree. A node is now used only when it IS the MRCA of the
+species that clade carries; the younger MRCA is a node of its own and is
+reached on its own iteration with its own age. Two tests pin it, including that
+a clade missing the deep taxa does not receive the deep age.
 
-The rank is found from the data rather than declared, because on an orthologue
-set the obvious choice is the wrong one. A genus contributes about one sequence
-per paralogue, so one representative per genus cuts the pooled set by two
-thirds and a single paralogue group by under a fifth -- and a per-group figure
-only ever sees the second number. Measured on the FXR1 family: genus takes FXR1
-from 116 rows to 96, still twice a readable panel, while order takes it to 42.
-choose_rank walks finest to coarsest and stops at the first rank inside the
-budget, so a scope gets the most resolution it can afford; a test asserts that
-the same metadata yields genus for one group and family for the pooled set.
+A third, found the same way again -- by the output of the fixed version being
+read against the data. The cleanliness test treated any tip inside a node that
+was not in the species set as evidence the topologies disagree. A tip whose
+species simply has no leaf in the species tree is not that; it is a gap in the
+metadata, and it cannot be checked either way. One such tip -- a single
+aardvark sequence, its species among the six TimeTree did not return -- sat
+inside FXR1 and FXR2 and made every node enclosing it unclean, so both clades
+fell from the 435 Myr jawed-vertebrate root to the 305 Myr teleost crown while
+FMR1, which has no aardvark sequence, kept the full range. One missing species
+cost two clades their entire deep calibration set.
 
-Three refusals, each of them a way the function could otherwise mislead
-quietly. Nothing is dropped to meet an impossible budget, because choosing
-which clades a figure omits is not a decision a row count can make. A rank with
-more levels than the finer rank above it does not nest -- one genus filed under
-two families -- and is reported instead of used. Sequences with no value at the
-rank are pooled rather than dropped, since dropping them removes whichever
-clade the taxonomy is worst for, which on this family is the invertebrates.
+Such tips are now tolerated inside a node and counted rather than counted
+against it, which restores 435 Myr to both clades and takes the set from 94
+calibrations to 106. Tolerating them is an assumption and the report says so
+with a number: their true position is unknown by definition, and one that in
+truth sat outside its node would make that node older than the age pinned to
+it. A tip whose species IS in the species tree and sits where the species tree
+says it should not still spoils the node, which is the disagreement the test
+exists to catch; a test pins each half.
 
-The representative is chosen by alignment completeness and never by anything
-the figure displays; picking by APR content or by support would make the panel
-select on its own variable and look cleaner than the data in a way the reader
-cannot see. format_selection_report prints the column used as a caption line so
-the figure carries it, and reports how many levels were decided by the
-tie-break, which is the honest measure of how arbitrary the panel is.
+format_report() also now says what the per-clade maximum is and is not. Read
+without that, the four maxima look like the order in which the paralogues
+diverged -- they are speciation ages inside each clade, a clade spanning
+deeper taxa simply reaches a deeper speciation, and the duplication ages are
+what dating estimates rather than anything this table holds.
 
-dating_command now takes the result of dating_inputs() as a required argument
-and refuses to emit a command when it does not pass. The first version took
-two paths and trusted them, and the command it produced paired the
-372-sequence alignment with the 357-tip tree -- a mismatch IQ-TREE reports
-only after reading and analysing both files, several hundred lines into a run.
-The cause is structural rather than careless: the tree is inferred from a copy
-of the alignment filtered at MIN_TIP_OCCUPANCY, and that filtered copy is
-never written out, so the two files a pipeline naturally hands you are exactly
-the two that disagree. dating_inputs names the difference in both directions
-and says which cause each one implies; matched_alignment builds the subset the
-tree carries, leaving columns alone, since trimming all-gap columns would
-renumber every block coordinate the project reports against.
+And a fourth, which is not a reporting fault but a missing step. A dating run
+collapses internal branches below a threshold before it estimates anything --
+a rate is a length over a time, and a length of zero gives no rate -- and
+collapsing merges nodes. Two calibrations that land on one merged node are two
+dates for one node, which is a contradiction rather than a weak constraint.
+LSD2 answers it with "conflict or not enough information in the input temporal
+constraints" and names neither the nodes nor the ages, so a 106-calibration
+file fails with nothing to go on.
 
-dating_command also passes --keep-ident by default, and on this project that
-is a decision about the data and not a convenience. IQ-TREE otherwise reduces
-the alignment to unique sequences -- 333 of 357 here -- and then rejects a
-fixed tree that still carries 357 tips, which is a second mismatch with the
-same symptom and a different cause. Keeping them is what the analysis needs
-anyway: of the 33 groups of identical tips on this family, one carries
-different APR traits between its members, so de-duplicating deletes an
-observation rather than a redundant row, and pruning the tree to the reduced
-set would do the same thing less visibly.
+On this set 149 of 355 internal branches sat below the threshold LSD2 chose
+(0.00105, which it derives and prints), five merged nodes carried two ages
+each, and one of those pairs was 99.9 against 318.8 Myr -- a 219 Myr
+contradiction on a branch the gene tree resolves as zero.
 
-That second case also marks the limit of dating_inputs, which the docstring
-now states: it compares the two FILES, and the reduction happens inside the
-tool, so two files that agree exactly can still fail and nothing readable from
-them predicts it. The tree-only branch of the message used to assert the files
-came from different runs; it now names de-duplication as the other cause and
-points at the flag, because the wrong half of that message is the half that
-fires in practice.
+drop_unresolvable() removes them, and by default removes every member of a
+conflicting group rather than choosing: a near-zero branch where the species
+tree puts 219 Myr is a split the gene tree does not resolve, and pinning either
+age asserts a position the tree cannot support. keep="deepest" is available for
+when that argument is wrong, which it sometimes is. Groups that agree on one
+age are redundant rather than conflicting, so one survives. On the real set
+this takes 106 calibrations to 96, all ten removals falling in FMR1.
 
-Not done here: neither module is wired into workflow/, and the logo step is
-still a stub. 39 new tests, 387 pass.
+COLLAPSE_THRESHOLD is a placeholder and says so: the value belongs to the
+dating method, which derives it from the tree and prints it, and guessing it
+would reintroduce the failure one threshold away.
+
+The one thing here that cannot be checked without running the binary is the
+shape of an ancestral-node line; the documented format covers tips only. So
+format_dates() takes line_format as a parameter rather than hard-coding a
+guess, and its docstring gives the cheap verification: write three
+calibrations, run the dating, and read back how many constraints LSD2 accepted.
+A format it does not understand yields zero rather than a wrong answer, which
+is why three lines are enough to find out.
+
+27 tests, 414 pass.
