@@ -45,7 +45,8 @@ verifies through :func:`amyloevo.phylo.tree.mrca_pair` instead of assuming.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from collections.abc import Sequence
+from dataclasses import dataclass, field, replace
 
 import numpy as np
 
@@ -151,6 +152,10 @@ class Calibration:
     #: their placement could not be checked. They do not invalidate the node --
     #: see :func:`calibrations` -- but they are the part of it taken on trust.
     unplaceable: int = 0
+    #: Why :func:`drop_unresolvable` removed this one. Empty on a calibration
+    #: that was kept; set only on the dropped list, so a report can say which
+    #: of the three quite different reasons applied.
+    reason: str = ""
 
     @property
     def date(self) -> float:
@@ -398,7 +403,9 @@ def calibrations(species_tree, gene_tree, species_of, membership, *,
 
 def drop_unresolvable(gene_tree, calibrations_: list[Calibration], *,
                       threshold: float = COLLAPSE_THRESHOLD,
-                      keep: str = "none"
+                      keep: str = "none",
+                      root_age: float | None = None,
+                      estimate: Sequence[tuple[str, str]] = (),
                       ) -> tuple[list[Calibration], list[Calibration]]:
     """Remove calibrations that a dating run would merge onto one node.
 
@@ -427,7 +434,28 @@ def drop_unresolvable(gene_tree, calibrations_: list[Calibration], *,
     Groups that agree on a single age are not conflicts. They are redundant --
     the same node constrained twice -- so one is kept and the rest dropped.
 
-    Returns ``(kept, dropped)``. ``threshold`` must be the value the dating run
+    Two further collisions exist, and neither is a conflict between
+    calibrations, which is why the version of this function that looked only
+    for those let both through.
+
+    ``root_age`` is the age pinned on the root by the dating run (IQ-TREE's
+    ``--date-root``, LSD2's ``-a``). A calibration that collapses onto the root
+    then gives that node a second age. Nothing in the calibration set
+    contradicts anything, so no check on the set can see it; the run simply
+    fails, and it fails only once the root is constrained -- which is how a set
+    that dated cleanly with a free root can stop working the moment a root
+    bound is added.
+
+    ``estimate`` names the nodes whose ages are the RESULT -- the duplications
+    -- as pairs of descendant tip labels. A calibration that collapses onto one
+    of them pins the answer to its own input, and the run reports nothing
+    unusual because there is only one age on that node. The output then agrees
+    with the literature because it came from the literature. This is the
+    failure the whole scheme exists to avoid, so these are dropped even though
+    they cost calibrations.
+
+    Returns ``(kept, dropped)``; each dropped calibration carries a
+    :attr:`Calibration.reason`. ``threshold`` must be the value the dating run
     will actually use; see :data:`COLLAPSE_THRESHOLD`.
     """
     parent = {}
@@ -449,28 +477,60 @@ def drop_unresolvable(gene_tree, calibrations_: list[Calibration], *,
             merged[id(find(clade))] = find(parent[id(clade)])
 
     by_name = {t.name: t for t in gene_tree.get_terminals()}
+
+    # Nodes that must not carry a calibration at all, and why. These are
+    # checked per merge GROUP rather than per node: the collapse is what puts a
+    # calibration onto the root or onto a duplication, so the group is the unit
+    # in which the collision exists.
+    blocked: dict[int, str] = {}
+    if root_age is not None:
+        blocked[id(find(gene_tree.root))] = (
+            f"collapses onto the root, which the run pins at {root_age:g}")
+    for pair in estimate:
+        a, b = pair
+        if a not in by_name or b not in by_name:
+            continue
+        node = gene_tree.common_ancestor([by_name[a], by_name[b]])
+        blocked.setdefault(id(find(node)),
+                           f"collapses onto {a},{b} -- a node whose age is to "
+                           f"be estimated, so a date here would be read back "
+                           f"out as the result")
+
     groups: dict[int, list[Calibration]] = {}
     orphans: list[Calibration] = []
     for item in calibrations_:
         if item.a not in by_name or item.b not in by_name:
-            orphans.append(item)
+            orphans.append(replace(
+                item, reason="names a tip that is not in the gene tree"))
             continue
         node = gene_tree.common_ancestor([by_name[item.a], by_name[item.b]])
         groups.setdefault(id(find(node)), []).append(item)
 
     kept, dropped = [], list(orphans)
-    for group in groups.values():
+    for gid, group in groups.items():
+        if gid in blocked:
+            dropped.extend(replace(c, reason=blocked[gid]) for c in group)
+            continue
         ages = {round(c.age, 6) for c in group}
         if len(ages) == 1:
             best = max(group, key=lambda c: (c.n_tips, c.a))
             kept.append(best)
-            dropped.extend(c for c in group if c is not best)
+            dropped.extend(
+                replace(c, reason="redundant: the same node, the same age")
+                for c in group if c is not best)
         elif keep == "deepest":
             best = max(group, key=lambda c: c.age)
             kept.append(best)
-            dropped.extend(c for c in group if c is not best)
+            dropped.extend(
+                replace(c, reason="merged with a node holding another age; "
+                                  "the deepest was kept")
+                for c in group if c is not best)
         else:
-            dropped.extend(group)
+            spread = ", ".join(f"{a:g}" for a in sorted(ages, reverse=True))
+            dropped.extend(
+                replace(c, reason=f"merged node would carry {len(ages)} "
+                                  f"different ages ({spread})")
+                for c in group)
     kept.sort(key=lambda c: (-c.age, c.clade))
     dropped.sort(key=lambda c: (-c.age, c.clade))
     return kept, dropped
@@ -484,10 +544,21 @@ def format_dropped(dropped: list[Calibration], *, threshold: float) -> str:
     by_clade: dict[str, int] = {}
     for item in dropped:
         by_clade[item.clade] = by_clade.get(item.clade, 0) + 1
+    by_reason: dict[str, list[Calibration]] = {}
+    for item in dropped:
+        by_reason.setdefault(item.reason or "unspecified", []).append(item)
     lines = [
         f"{len(dropped)} calibration(s) removed as unresolvable at a collapse "
         f"threshold of {threshold:g}:",
         "  " + ", ".join(f"{clade} {n}" for clade, n in sorted(by_clade.items())),
+        "",
+    ]
+    for reason, group in sorted(by_reason.items(), key=lambda kv: -len(kv[1])):
+        ages = [c.age for c in group]
+        lines.append(f"  {len(group):3d}  {reason}")
+        lines.append(f"       ages {min(ages):.2f} to {max(ages):.2f}, "
+                     f"clades {', '.join(sorted({c.clade for c in group}))}")
+    lines += [
         "",
         "  Each sat on a node that the dating run merges with another carrying "
         "a different age,",
@@ -503,6 +574,188 @@ def format_dropped(dropped: list[Calibration], *, threshold: float) -> str:
         "from there, not",
         "  from this module's placeholder.",
     ]
+    return "\n".join(lines)
+
+
+@dataclass
+class Bracket:
+    """The interval a duplication must fall in, deduced from two topologies."""
+
+    node: str
+    #: Older than this: the deepest speciation retained in EVERY daughter.
+    lower: float
+    #: Younger than this: the shallowest speciation that brings in a lineage
+    #: not carrying the complete set of daughters.
+    upper: float
+    #: Species carrying a gene in every daughter clade -- the lower bound's
+    #: witnesses. One is not enough: a single species cannot witness a
+    #: speciation.
+    witnesses: int
+    #: The species whose entry sets the upper bound.
+    bound_by: str
+    #: Tips per daughter clade, largest first.
+    daughters: tuple[int, ...]
+    #: Gene-tree species with no leaf in the species tree, so not usable either
+    #: way. They narrow nothing and are counted rather than assumed.
+    unplaceable: int = 0
+
+    @property
+    def width(self) -> float:
+        return float(self.upper) - float(self.lower)
+
+    @property
+    def empty(self) -> bool:
+        """The two bounds crossed, which is a contradiction, not an interval."""
+        return self.upper <= self.lower
+
+
+def bracket(species_tree, gene_tree, species_of, node, *,
+            label: str | None = None) -> Bracket:
+    """Bound a duplication's age from the two topologies, without a clock.
+
+    A duplication is older than any speciation retained in BOTH of its daughter
+    lineages, and younger than the shallowest speciation at which the daughters
+    are not all present. Both bounds are speciation ages, read off a dated
+    species tree; neither uses a branch length of the gene tree. That is the
+    whole point of doing it this way: the gene tree's branch lengths are the
+    part that rate heterogeneity corrupts, and on a paralogue stem the rate
+    differs most from the calibrated regions, so a clock fitted there estimates
+    the model rather than the data.
+
+    What the bracket is NOT is an estimate. The interval is a deduction and its
+    width is not uncertainty to be narrowed by better statistics -- it is the
+    resolution the taxon sampling affords. Adding a species that branches
+    between the two bounds narrows it; adding sequences of species already
+    inside does not.
+
+    ``node`` is either a gene-tree clade or a pair of descendant tip labels.
+    ``species_of`` maps GENE-tree tip labels to species names, as in
+    :func:`calibrations`.
+
+    Raises ``ValueError`` when the node has fewer than two daughters, when no
+    species carries a gene in every daughter (no speciation is witnessed in all
+    of them, so there is no lower bound), or when no species outside that set
+    has a leaf in the species tree (nothing sets an upper bound).
+    """
+    ages = node_ages(species_tree)
+    leaves: dict[str, list] = {}
+    for leaf in species_tree.get_terminals():
+        leaves.setdefault(binomial(normalise(leaf.name)), []).append(leaf)
+
+    if isinstance(node, (tuple, list)):
+        by_name = {t.name: t for t in gene_tree.get_terminals()}
+        a, b = node
+        missing = [n for n in (a, b) if n not in by_name]
+        if missing:
+            raise ValueError(f"not tips of the gene tree: {missing}")
+        clade = gene_tree.common_ancestor([by_name[a], by_name[b]])
+        name = label or f"{a},{b}"
+    else:
+        clade = node
+        name = label or (getattr(node, "name", None) or "node")
+
+    daughters = list(clade.clades)
+    if len(daughters) < 2:
+        raise ValueError(f"{name}: {len(daughters)} daughter clade(s); a "
+                         f"duplication node has at least two")
+
+    def species_under(sub) -> set[str]:
+        out = set()
+        for tip in sub.get_terminals():
+            sp = species_of.get(tip.name)
+            if sp:
+                out.add(binomial(normalise(sp)))
+        return out
+
+    per_daughter = [species_under(d) for d in daughters]
+    full = set.intersection(*per_daughter) if per_daughter else set()
+    placeable = {s for s in full if s in leaves}
+    unplaceable = len(full) - len(placeable)
+    if len(placeable) < 2:
+        raise ValueError(
+            f"{name}: {len(placeable)} species carry a gene in every daughter "
+            f"and have a leaf in the species tree; a speciation cannot be "
+            f"witnessed by fewer than two, so this node has no lower bound")
+
+    lower_node = species_tree.common_ancestor(
+        [leaf for s in placeable for leaf in leaves[s]])
+    lower = ages[id(lower_node)]
+
+    # Only species the gene tree actually holds can set the upper bound. A
+    # species with no gene in the tree is absence of evidence: it may carry
+    # every daughter and simply not have been sampled, and using it would turn
+    # a gap in the sampling into a bound on the answer.
+    observed = set()
+    for tip in gene_tree.get_terminals():
+        sp = species_of.get(tip.name)
+        if sp:
+            observed.add(binomial(normalise(sp)))
+    candidates = {s for s in observed if s not in full and s in leaves}
+    if not candidates:
+        raise ValueError(
+            f"{name}: every species with a gene in this tree carries all "
+            f"daughters, so nothing sets an upper bound -- the duplication is "
+            f"older than the deepest node sampled, and more sequences of the "
+            f"same species will not change that")
+
+    upper, bound_by = float("inf"), ""
+    base = [leaf for s in placeable for leaf in leaves[s]]
+    for s in sorted(candidates):
+        anc = species_tree.common_ancestor(base + leaves[s])
+        age = ages[id(anc)]
+        if age < upper:
+            upper, bound_by = age, s
+
+    return Bracket(
+        node=name, lower=float(lower), upper=float(upper),
+        witnesses=len(placeable), bound_by=bound_by,
+        daughters=tuple(sorted((len(d.get_terminals()) for d in daughters),
+                               reverse=True)),
+        unplaceable=unplaceable,
+    )
+
+
+def format_bracket(item: Bracket) -> str:
+    """The bracket, with each end labelled by what it rests on."""
+    lines = [
+        f"{item.node}: duplication between {item.lower:.2f} and "
+        f"{item.upper:.2f} Myr (width {item.width:.2f})",
+        f"  daughters        {', '.join(str(n) for n in item.daughters)} tips",
+        f"  older than       {item.lower:8.2f}  -- the deepest speciation "
+        f"retained in every daughter,",
+        f"                              witnessed by {item.witnesses} species",
+        f"  younger than     {item.upper:8.2f}  -- entry of {item.bound_by}, "
+        f"which does not carry them all",
+    ]
+    if item.unplaceable:
+        lines.append(f"  not usable       {item.unplaceable} species carry all "
+                     f"daughters but have no leaf in the species tree")
+    if item.empty:
+        lines += [
+            "",
+            "  THE BOUNDS MEET OR CROSS, so this node has no interval. A "
+            "species nested INSIDE",
+            "  the clade that witnesses the lower bound carries a gene but not "
+            "in every daughter.",
+            "  The ordinary explanation is loss: that lineage had the "
+            "paralogue and lost it, which",
+            "  the bracket cannot distinguish from never having had it. The "
+            "others are a gene tree",
+            "  that disagrees with the species tree here, or a sequence "
+            "assigned to the wrong",
+            f"  daughter. Check {item.bound_by} first -- it is the species "
+            f"that closed the interval.",
+        ]
+    else:
+        lines += [
+            "",
+            "  Both ends are speciation ages and the logic is topological, so "
+            "no branch length",
+            "  of the gene tree enters either one. The width is what the taxon "
+            "sampling affords,",
+            "  not an uncertainty to be reduced by more sequences of species "
+            "already inside it.",
+        ]
     return "\n".join(lines)
 
 

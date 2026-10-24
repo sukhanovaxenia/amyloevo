@@ -403,3 +403,161 @@ def test_the_report_separates_the_inputs_from_the_results():
     assert "ages are written negative" in text.lower()
     assert "check and not an" in text
     assert "sign convention is" in text
+
+
+# --- a constrained root, and nodes whose age is the answer ------------------
+
+#: The first child's stem is 1e-7, so a dating run merges it INTO the root. A
+#: calibration on it is fine while the root is free and contradictory the
+#: moment the root is pinned -- which is why a set that dated cleanly can fail
+#: as soon as a root bound is added.
+ROOT_COLLAPSING = "(((A:1,B:1):1,Cc:1):0.0000001,(E:1,F:1):1);"
+
+
+def test_a_calibration_merging_into_the_root_survives_a_free_root():
+    tree = _read(ROOT_COLLAPSING)
+    kept, dropped = C.drop_unresolvable(
+        tree, [_cal("A", "Cc", 300.0), _cal("E", "F", 50.0)], threshold=1e-6)
+    assert sorted(c.age for c in kept) == [50.0, 300.0]
+    assert dropped == []
+
+
+def test_the_same_calibration_is_dropped_once_the_root_is_pinned():
+    """Nothing in the calibration set contradicts anything, so no check on the
+    set can see this. The collision is between a calibration and the root age,
+    and it exists only when a root age exists."""
+    tree = _read(ROOT_COLLAPSING)
+    kept, dropped = C.drop_unresolvable(
+        tree, [_cal("A", "Cc", 300.0), _cal("E", "F", 50.0)],
+        threshold=1e-6, root_age=500.0)
+    assert [c.age for c in kept] == [50.0]
+    assert [c.age for c in dropped] == [300.0]
+    assert "root" in dropped[0].reason
+    assert "500" in dropped[0].reason
+
+
+def test_a_calibration_landing_on_a_node_to_be_estimated_is_dropped():
+    """A calibration that collapses onto a duplication gives that node the
+    literature's own number, and the run reports nothing unusual because the
+    node then carries exactly one age. The result would agree with the
+    literature because it came from it."""
+    tree = _read(COLLAPSING)
+    kept, dropped = C.drop_unresolvable(
+        tree, [_cal("A", "B", 100.0), _cal("E", "F", 50.0)],
+        threshold=1e-6, estimate=[("A", "Cc")])
+    assert [c.age for c in kept] == [50.0]
+    assert [c.age for c in dropped] == [100.0]
+    assert "estimated" in dropped[0].reason
+
+
+def test_naming_a_node_no_calibration_touches_changes_nothing():
+    tree = _read(COLLAPSING)
+    kept, dropped = C.drop_unresolvable(
+        tree, [_cal("A", "B", 100.0), _cal("E", "F", 50.0)],
+        threshold=1e-6, estimate=[("A", "D")])
+    assert sorted(c.age for c in kept) == [50.0, 100.0]
+    assert dropped == []
+
+
+def test_the_dropped_report_separates_the_three_reasons():
+    tree = _read(ROOT_COLLAPSING)
+    _, dropped = C.drop_unresolvable(
+        tree, [_cal("A", "Cc", 300.0), _cal("A", "B", 90.0),
+               _cal("A", "B", 90.0)],
+        threshold=1e-6, root_age=500.0)
+    text = C.format_dropped(dropped, threshold=1e-6)
+    assert "root" in text
+    assert "redundant" in text
+
+
+# --- the bracket -----------------------------------------------------------
+
+#: Ages: (Homo,Mus) 90, +Gallus 100, (Apis,Drosophila) 75, root 150.
+SPECIES = C_SPECIES = CLEAN
+
+#: Two daughters, each carrying Homo and Mus, with a Gallus sequence outside
+#: the duplication -- without it the gene tree holds no species that lacks a
+#: daughter, and nothing can set an upper bound.
+DUP_HM = "(((h1:1,m1:1):1,(h2:1,m2:1):1):1,g1:2);"
+
+SP_OF = {"h1": "Homo sapiens", "h2": "Homo sapiens",
+         "m1": "Mus musculus", "m2": "Mus musculus",
+         "g1": "Gallus gallus", "g2": "Gallus gallus",
+         "a1": "Apis mellifera"}
+
+
+def test_the_bracket_is_the_two_speciations_that_enclose_the_duplication():
+    """Older than the deepest speciation retained in both daughters (Homo/Mus,
+    90), younger than the entry of a sampled species that does not carry them
+    both (Gallus, 100)."""
+    b = C.bracket(_read(SPECIES), _read(DUP_HM),
+                  {**SP_OF, "g1": "Gallus gallus"}, ("h1", "h2"))
+    assert b.lower == 90.0
+    assert b.upper == 100.0
+    assert b.bound_by == "Gallus gallus"
+    assert b.witnesses == 2
+    assert b.daughters == (2, 2)
+
+
+def test_a_species_branching_inside_the_bracket_narrows_it():
+    """Adding Gallus to BOTH daughters moves the lower bound from 90 to 100:
+    the speciation it witnesses is now retained in each. Sequences of species
+    already inside the interval would not have done this."""
+    gene = ("((((h1:1,m1:1):1,g1:1):1,((h2:1,m2:1):1,g2:1):1):1,a1:3);")
+    b = C.bracket(_read(SPECIES), _read(gene),
+                  {**SP_OF, "a1": "Apis mellifera"}, ("h1", "h2"))
+    assert b.lower == 100.0
+    assert b.upper == 150.0
+    assert b.witnesses == 3
+
+
+def test_one_witness_is_not_a_speciation_and_is_refused():
+    gene = "((h1:1,m1:1):1,(h2:1,g2:1):1);"
+    with pytest.raises(ValueError, match="witnessed by fewer than two"):
+        C.bracket(_read(SPECIES), _read(gene), SP_OF, ("h1", "h2"))
+
+
+def test_an_unsampled_species_does_not_get_to_set_the_upper_bound():
+    """Gallus and Apis are in the species tree but have no gene here. Either
+    may carry every daughter and simply not have been searched, so using one
+    would turn a gap in the sampling into a bound on the answer. With nothing
+    sampled that lacks a daughter, the function refuses rather than inventing
+    an upper bound."""
+    gene = "((h1:1,m1:1):1,(h2:1,m2:1):1);"
+    only_hm = {k: v for k, v in SP_OF.items() if k in {"h1", "h2", "m1", "m2"}}
+    with pytest.raises(ValueError, match="nothing sets an upper bound"):
+        C.bracket(_read(SPECIES), _read(gene), only_hm, ("h1", "h2"))
+
+
+def test_a_species_nested_inside_the_witnesses_closes_the_interval():
+    """Mus carries a gene but not in every daughter, and it sits inside the
+    clade the lower bound rests on. The bounds then meet, which is loss rather
+    than an interval, and the report has to say so instead of printing a width
+    of zero as though it were precision."""
+    species = ("(((Homo_sapiens:90,Mus_musculus:90):10,"
+               "Rattus_norvegicus:100):50,Gallus_gallus:150);")
+    gene = "((h1:1,r1:1):1,(h2:1,r2:1,m2:1):1);"
+    sp = {"h1": "Homo sapiens", "h2": "Homo sapiens",
+          "r1": "Rattus norvegicus", "r2": "Rattus norvegicus",
+          "m2": "Mus musculus"}
+    b = C.bracket(_read(species), _read(gene), sp, ("h1", "h2"))
+    assert b.lower == 100.0
+    assert b.empty
+    text = C.format_bracket(b)
+    assert "loss" in text
+    assert "Mus musculus" in text
+
+
+def test_the_bracket_report_labels_which_end_rests_on_what():
+    b = C.bracket(_read(SPECIES), _read(DUP_HM),
+                  {**SP_OF, "g1": "Gallus gallus"}, ("h1", "h2"))
+    text = C.format_bracket(b)
+    assert "older than" in text and "younger than" in text
+    assert "no branch length" in text
+
+
+def test_a_node_with_one_daughter_is_not_a_duplication():
+    gene = "((h1:1,m1:1):1,(h2:1,m2:1):1);"
+    tree = _read(gene)
+    with pytest.raises(ValueError, match="at least two"):
+        C.bracket(_read(SPECIES), tree, SP_OF, tree.get_terminals()[0])

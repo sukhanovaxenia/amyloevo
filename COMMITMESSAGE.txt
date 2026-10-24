@@ -1,131 +1,78 @@
-feat(phylo): node calibrations from a dated species tree
+feat(phylo): a constrained root, nodes left to be estimated, and a bracket
 
-New module phylo/calibrate.py, prompted by a failure that raised nothing. A
-TimeTree query for 152 species came back as 223 leaves: the species asked for
-were replaced by their subspecies. Apis mellifera arrived as fourteen leaves,
-Ailuropoda melanoleuca as two, and Homo sapiens and Mus musculus were absent
-outright -- which removes the best-dated node in vertebrate biology from the
-calibration set with no error anywhere. 123 of 152 names matched, 100 leaves
-were names nobody asked for, 29 queried names had no leaf at all.
+Two collisions that drop_unresolvable could not see, and a way to bound a
+duplication without a clock. Both came from the same run: a set of 96
+calibrations that dated cleanly with a free root, and failed the moment a root
+bound was added, with LSD2 naming neither the nodes nor the ages.
 
-So the module's entry point is coverage(), not the date file. It lines a
-species tree's leaves up with the taxa of an analysis, reports both directions
-and counts how many leaves each species arrived with, and says plainly why the
-missing ones matter: a calibration set that lost its oldest nodes still dates
-the tree, and the loss shows up only as a suspiciously tight interval.
+drop_unresolvable looked for one kind of collision only -- two calibrations
+merged by branch collapse onto one node, which is two dates for one node. It
+found those. It could not find either of the other two, and for the same
+reason in both cases: nothing in the calibration set contradicts anything, so
+no check on the set alone can see it.
 
-Its message was wrong on first contact with the real tree, in the way this
-project's reporting keeps going wrong. Every comparison in Coverage is made on
-binomials, so a species present as thirteen subspecies counts once -- which
-means the species-level numbers are identical before and after the collapse.
-The message reported only those numbers and said the duplicates "were folded
-back", so on 223 leaves it read exactly as it did on 146 and claimed an action
-coverage() does not perform. It now reports the raw leaf count beside the
-species count, states that it only counts and that collapse_subspecies() is
-what acts, and a test asserts that the leaf count is the one figure that moves.
-collapse_subspecies() folds them back by binomial, keeping one leaf per
-species. That loses nothing -- the kept leaf stays at every leaf's distance
-from the root on an ultrametric tree, and a divergence involving the species is
-read above the subspecies clade -- but it does assume the tree IS ultrametric,
-so node_ages() refuses a tree whose root-to-tip distances spread, since a dated
-download is ultrametric by construction and a spread means the file is some
-other export whose ages would be numbers rather than errors.
+A calibration that collapses onto the ROOT is consistent with every other
+calibration. It becomes a contradiction only when the run pins the root, which
+is why a set that worked can stop working when a root bound is added and
+nothing about the set has changed. root_age now names that age, and
+calibrations in the root's merge group are dropped against it.
 
-The calibrations go on nodes, because the tips carry no time. LSD2's date file
-is built for serially sampled sequences, where time enters from the tips; an
-orthologue set is the other case, every species extant, so a tree with all tips
-at one date has no scale at all. Tips go in at zero via --date-tip 0 and every
-piece of temporal information comes from internal nodes, written as negative
-ages because the axis runs forward.
+A calibration that collapses onto a node whose age is the RESULT is worse,
+because it does not fail. The node carries exactly one age, the run reports
+nothing unusual, and the duplication's date comes back as whatever the species
+tree put there. The output then agrees with the literature because it came
+from the literature, which is the circularity the whole scheme was built to
+avoid: calibrations go on speciations inside the paralogue clades and never on
+the duplications, precisely so that the duplication ages are estimated rather
+than asserted. Branch collapse puts them there anyway. estimate= names those
+nodes by pairs of descendant tips and the collision is caught.
 
-Which nodes: speciations inside the paralogue clades, never the duplication.
-Calibrating the duplication with a whole-genome-duplication date and then
-reporting the duplication's date is circular. A dated species tree estimates
-the speciations independently of this family, and the duplication nodes have no
-counterpart in a species tree at all -- a duplication is not a speciation -- so
-their ages come out as results. That asymmetry is the argument for doing it
-this way round and it is what makes a later comparison against the WGD
-literature a check rather than an echo. format_report() says which side of that
-line each number is on, because it is the first question a reader has.
+Each dropped calibration now carries a reason, and format_dropped groups by it
+rather than by clade, because the three are not the same problem and do not
+have the same fix.
 
-One speciation yields up to one calibration per paralogue, since each species
-appears once in each clade and all of them carry the same age -- more
-constraints for least squares, provided each lands on the node intended.
-calibrations() verifies that through phylo.tree.mrca_pair rather than assuming
-it, and a test pins the consequence: a clade whose internal topology disagrees
-with the species tree keeps only its own crown, while an agreeing clade keeps
-every node. The surviving count is therefore a measure of agreement between the
-two trees, and the gap between those two numbers is what a constraint tree buys.
+bracket() is the other half. A duplication is older than any speciation
+retained in BOTH daughter lineages and younger than the shallowest speciation
+at which the daughters are not all present. Both bounds are speciation ages
+read off the dated species tree; neither uses a branch length of the gene tree.
 
-A second reporting fault, found the same way -- on the real tree, by its
-output being read. calibrations() took each species-tree node's own age for
-whatever gene tips a clade contributed, but a node's age is the divergence of
-ALL its descendants and a paralogue clade rarely carries all of them: a
-vertebrate clade carries no sponges. So the species-tree root handed its 892
-Myr to every clade, and the per-clade maximum came out equal to the depth of
-the whole species tree. A node is now used only when it IS the MRCA of the
-species that clade carries; the younger MRCA is a node of its own and is
-reached on its own iteration with its own age. Two tests pin it, including that
-a clade missing the deep taxa does not receive the deep age.
+That matters because the gene tree's branch lengths are the part rate
+heterogeneity corrupts, and on this family it is not a small effect. Three
+measurements, each with elapsed time held constant by construction: two copies
+in one chondrichthyan genome give root-to-tip 0.6522 against 0.3131, a ratio of
+2.08 at support 100 on both nodes; within one paralogue group, mammals run
+0.002-0.018 against teleosts at 0.40-0.49; within one cyclostome duplication,
+one daughter pair carries 0.192 and 0.151 against 0.699 and 0.357 in the other.
+A single global rate is therefore false as a premise rather than approximate as
+a model, and a point estimate from a strict clock states the clock rather than
+the sequences. The least-squares run that prompted this returned a root age of
+-7487 Myr, older than the Earth.
 
-A third, found the same way again -- by the output of the fixed version being
-read against the data. The cleanliness test treated any tip inside a node that
-was not in the species set as evidence the topologies disagree. A tip whose
-species simply has no leaf in the species tree is not that; it is a gap in the
-metadata, and it cannot be checked either way. One such tip -- a single
-aardvark sequence, its species among the six TimeTree did not return -- sat
-inside FXR1 and FXR2 and made every node enclosing it unclean, so both clades
-fell from the 435 Myr jawed-vertebrate root to the 305 Myr teleost crown while
-FMR1, which has no aardvark sequence, kept the full range. One missing species
-cost two clades their entire deep calibration set.
+Two decisions inside bracket() are worth naming because they could reasonably
+have gone the other way.
 
-Such tips are now tolerated inside a node and counted rather than counted
-against it, which restores 435 Myr to both clades and takes the set from 94
-calibrations to 106. Tolerating them is an assumption and the report says so
-with a number: their true position is unknown by definition, and one that in
-truth sat outside its node would make that node older than the age pinned to
-it. A tip whose species IS in the species tree and sits where the species tree
-says it should not still spoils the node, which is the disagreement the test
-exists to catch; a test pins each half.
+The upper bound is set only by species the GENE tree holds. A species in the
+species tree with no gene in the analysis is absence of evidence: it may carry
+every daughter and simply not have been searched, and letting it bound the
+answer would convert a gap in the sampling into a result. With nothing sampled
+that lacks a daughter, the function raises instead of inventing a bound.
 
-format_report() also now says what the per-clade maximum is and is not. Read
-without that, the four maxima look like the order in which the paralogues
-diverged -- they are speciation ages inside each clade, a clade spanning
-deeper taxa simply reaches a deeper speciation, and the duplication ages are
-what dating estimates rather than anything this table holds.
+A lower bound needs two witnesses. One species cannot witness a speciation, so
+a node where only one species carries a gene in every daughter is refused
+rather than given its own age as a bound.
 
-And a fourth, which is not a reporting fault but a missing step. A dating run
-collapses internal branches below a threshold before it estimates anything --
-a rate is a length over a time, and a length of zero gives no rate -- and
-collapsing merges nodes. Two calibrations that land on one merged node are two
-dates for one node, which is a contradiction rather than a weak constraint.
-LSD2 answers it with "conflict or not enough information in the input temporal
-constraints" and names neither the nodes nor the ages, so a 106-calibration
-file fails with nothing to go on.
+The bounds can meet, and then there is no interval. That happens when a species
+nested inside the clade carrying the lower bound has a gene but not in every
+daughter -- ordinarily loss, which the bracket cannot distinguish from never
+having had the paralogue, and otherwise a gene tree that disagrees with the
+species tree or a sequence in the wrong daughter. Bracket.empty reports it and
+format_bracket names the species that closed the interval, rather than printing
+a width of zero as though it were precision.
 
-On this set 149 of 355 internal branches sat below the threshold LSD2 chose
-(0.00105, which it derives and prints), five merged nodes carried two ages
-each, and one of those pairs was 99.9 against 318.8 Myr -- a 219 Myr
-contradiction on a branch the gene tree resolves as zero.
+The width is not uncertainty. It is the resolution the taxon sampling affords,
+and it narrows only when a species branching between the two bounds is added --
+not by more sequences of species already inside. On the set this was written
+for, adding a lamprey, a hagfish and a chimaera took the interval from more
+than 150 Myr to under 40.
 
-drop_unresolvable() removes them, and by default removes every member of a
-conflicting group rather than choosing: a near-zero branch where the species
-tree puts 219 Myr is a split the gene tree does not resolve, and pinning either
-age asserts a position the tree cannot support. keep="deepest" is available for
-when that argument is wrong, which it sometimes is. Groups that agree on one
-age are redundant rather than conflicting, so one survives. On the real set
-this takes 106 calibrations to 96, all ten removals falling in FMR1.
-
-COLLAPSE_THRESHOLD is a placeholder and says so: the value belongs to the
-dating method, which derives it from the tree and prints it, and guessing it
-would reintroduce the failure one threshold away.
-
-The one thing here that cannot be checked without running the binary is the
-shape of an ancestral-node line; the documented format covers tips only. So
-format_dates() takes line_format as a parameter rather than hard-coding a
-guess, and its docstring gives the cheap verification: write three
-calibrations, run the dating, and read back how many constraints LSD2 accepted.
-A format it does not understand yields zero rather than a wrong answer, which
-is why three lines are enough to find out.
-
-27 tests, 414 pass.
+12 tests, 426 pass.
