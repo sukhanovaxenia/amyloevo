@@ -271,13 +271,46 @@ def test_filtering_one_side_only_would_change_the_answer():
 def test_placement_test_honours_usable():
     rates = np.ones(300)
     rates[100:140] = 0.05
-    junk = np.zeros(300, dtype=bool)
-    junk[::7] = True                      # scattered unusable columns
-    keep = ~junk
+    keep = np.zeros(300, dtype=bool)
+    keep[20:260] = True                   # a contiguous usable core
     result = rr.placement_test(rates, [(100, 139)], permutations=300,
                                rng=np.random.default_rng(11), usable=keep)
     assert result.observed < 0.2
     assert result.p_value < 0.01
+
+
+def test_a_width_that_fits_in_no_usable_run_is_refused():
+    """Not silently widened to an unrestricted null: if a block of this width
+    could not have been defined anywhere the mask allows, the mask and the
+    blocks disagree and the user has to say which one is wrong."""
+    rates = np.ones(300)
+    keep = np.zeros(300, dtype=bool)
+    keep[::7] = True                      # no run longer than one column
+    with pytest.raises(ValueError, match="could not have been defined"):
+        rr.placement_test(rates, [(100, 139)], permutations=50,
+                          rng=np.random.default_rng(14), usable=keep)
+
+
+def test_the_null_rests_on_as_much_data_as_the_observation():
+    """The flaw this guards: blocks sit on well-covered columns by definition,
+    so placements scattered over a mostly-sparse alignment carry a fraction of
+    the usable columns, their ratios are noisy, and the null fans out until
+    nothing can reach significance. Matching on the usable count removes that
+    and the spread collapses."""
+    rng = np.random.default_rng(31)
+    rates = rng.gamma(2.0, 0.4, size=2000)
+    keep = np.zeros(2000, dtype=bool)
+    keep[:400] = True                     # only a fifth of the alignment usable
+    blocks = [(10, 23), (60, 71), (120, 133), (200, 213)]
+    confined = rr.placement_test(rates, blocks, permutations=600,
+                                 rng=np.random.default_rng(32), usable=keep,
+                                 restrict=True)
+    loose = rr.placement_test(rates, blocks, permutations=600,
+                              rng=np.random.default_rng(32), usable=keep,
+                              restrict=False, min_usable=1)
+    assert (confined.null_hi - confined.null_lo) < (loose.null_hi - loose.null_lo)
+    assert confined.observed_usable == confined.n_block_columns
+    assert confined.outside_allowed == 0
 
 
 def test_blocks_with_no_usable_column_are_refused():
@@ -294,13 +327,14 @@ def test_a_null_that_mostly_lands_outside_the_usable_columns_is_refused():
     """The observed blocks are fine; the PLACEMENTS are not, and that is a
     different failure. Averaging the few placements that happened to land on
     usable columns would answer a question nobody asked."""
-    rates = np.ones(400)
+    rates = np.ones(4000)
     rates[5:35] = 0.2
-    keep = np.zeros(400, dtype=bool)
+    keep = np.zeros(4000, dtype=bool)
     keep[:40] = True                      # observed block usable, most placements not
-    with pytest.raises(ValueError, match="too sparse"):
+    with pytest.raises(ValueError, match="too sparse|too fragmented"):
         rr.placement_test(rates, [(5, 34)], permutations=200,
-                          rng=np.random.default_rng(13), usable=keep)
+                          rng=np.random.default_rng(13), usable=keep,
+                          restrict=False)
 
 
 def test_min_usable_excludes_placements_resting_on_a_handful_of_columns():
@@ -314,9 +348,29 @@ def test_min_usable_excludes_placements_resting_on_a_handful_of_columns():
     keep[:300] = True
     lax = rr.placement_test(rates, [(20, 49)], permutations=400,
                             rng=np.random.default_rng(21), usable=keep,
-                            min_usable=1)
+                            min_usable=1, restrict=False)
     strict = rr.placement_test(rates, [(20, 49)], permutations=400,
                                rng=np.random.default_rng(21), usable=keep,
-                               min_usable=25)
+                               min_usable=25, restrict=False)
     assert strict.permutations < lax.permutations
     assert lax.observed == pytest.approx(strict.observed)
+
+
+def test_two_sided_p_is_calibrated_on_a_skewed_null():
+    """A ratio's null is right-skewed: bounded by zero below, unbounded above.
+    Measured as |observed - median| a halving counts as milder than a doubling,
+    so an observation sitting at the 2.5th percentile of the null can come back
+    around p = 0.14 while the correct answer is near 0.05. On the log scale the
+    two directions are the same distance, which is what two-sided has to mean
+    for a ratio.
+    """
+    rates = np.ones(400)
+    rates[100:300] = 0.02             # half the protein slow -> skewed null
+    blocks = [(110, 129), (160, 179), (240, 259)]
+    result = rr.placement_test(rates, blocks, permutations=3000,
+                               rng=np.random.default_rng(77), restrict=False)
+    # the observation lands on the lower 2.5% edge of the null
+    assert result.observed == pytest.approx(result.null_lo, rel=0.05)
+    assert result.p_value < 0.10, (
+        f"p={result.p_value:.4f} for an observation at the 2.5th percentile; "
+        f"the statistic is not measuring both directions alike")

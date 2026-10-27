@@ -81,6 +81,9 @@ class PlacementTest:
     null_lo: float
     null_hi: float
     widths: tuple[int, ...]
+    n_block_columns: int = 0
+    observed_usable: int = 0
+    outside_allowed: int = 0
 
 
 def _as_spans(blocks) -> list[tuple[int, int]]:
@@ -270,39 +273,96 @@ def contrast(rates, mask, *, usable=None) -> RegionRates:
     )
 
 
-def place_blocks(widths, n_columns: int, rng) -> list[tuple[int, int]]:
+def place_blocks(widths, n_columns: int, rng, *, within=None,
+                 max_tries: int = 200) -> list[tuple[int, int]] | None:
     """Lay blocks of these widths at random, non-overlapping and in bounds.
 
-    The slack -- the columns not covered by any block -- is split at random
-    into the gaps before, between and after them, and the widths are shuffled
-    so block identity is not tied to position. Blocks may end up abutting;
-    that is a legitimate placement, and forbidding it would bias the null
-    towards spread-out arrangements the data was never compared against.
+    ``within`` is the set of columns a block could actually have been defined
+    in, and it matters more than it looks. A block is only defined where
+    coverage reaches a threshold (``conserve.blocks.DEFINE_MIN_COVERAGE``), so
+    the real blocks sit in well-filled columns BY CONSTRUCTION. Relocating them
+    across the whole alignment therefore compares them against arrangements the
+    defining procedure could never have produced: most such placements land
+    largely in sparse columns, their rate is averaged over a handful of
+    estimable sites, and the null comes out far noisier than the observation it
+    is being compared with. The test is then conservative for a reason that has
+    nothing to do with the biology.
+
+    Returns None when the blocks could not be placed within the allowed
+    columns in ``max_tries`` attempts, which the caller counts rather than
+    retries forever.
+
+    Without ``within`` the slack is split at random into the gaps before,
+    between and after the blocks. Blocks may abut; that is a legitimate
+    placement, and forbidding it would bias the null towards spread-out
+    arrangements.
     """
     widths = [int(w) for w in widths]
     if any(w <= 0 for w in widths):
         raise ValueError(f"widths must be positive: {widths}")
     total = sum(widths)
-    free = int(n_columns) - total
-    if free < 0:
+    n_columns = int(n_columns)
+    if total > n_columns:
         raise ValueError(
             f"blocks total {total} column(s) but the alignment has "
             f"{n_columns}: they cannot be placed without overlapping"
         )
-    order = rng.permutation(len(widths))
-    breaks = np.sort(rng.integers(0, free + 1, size=len(widths)))
-    spans: list[tuple[int, int]] = []
-    used = 0
-    for i, idx in enumerate(order):
-        w = widths[idx]
-        start = int(breaks[i]) + used
-        spans.append((start, start + w - 1))
-        used += w
-    return spans
+
+    if within is None:
+        free = n_columns - total
+        order = rng.permutation(len(widths))
+        breaks = np.sort(rng.integers(0, free + 1, size=len(widths)))
+        spans: list[tuple[int, int]] = []
+        used = 0
+        for i, idx in enumerate(order):
+            w = widths[idx]
+            start = int(breaks[i]) + used
+            spans.append((start, start + w - 1))
+            used += w
+        return spans
+
+    allowed = np.asarray(within, dtype=bool)
+    if allowed.shape != (n_columns,):
+        raise ValueError(f"within has shape {allowed.shape}, "
+                         f"expected ({n_columns},)")
+    # starts[w] lists every position where a run of w allowed columns begins
+    runs = np.cumsum(allowed) - np.cumsum(np.concatenate(([0], allowed[:-1])))
+    starts_for: dict[int, np.ndarray] = {}
+    for w in set(widths):
+        ok = np.ones(n_columns - w + 1, dtype=bool)
+        for off in range(w):
+            ok &= allowed[off : n_columns - w + 1 + off]
+        starts_for[w] = np.flatnonzero(ok)
+        if starts_for[w].size == 0:
+            raise ValueError(
+                f"no run of {w} allowed column(s) anywhere: a block of that "
+                f"width could not have been defined, yet one was"
+            )
+
+    for _ in range(max_tries):
+        taken = np.zeros(n_columns, dtype=bool)
+        spans = []
+        for idx in rng.permutation(len(widths)):
+            w = widths[idx]
+            cands = starts_for[w]
+            placed = False
+            for _ in range(32):
+                s = int(cands[rng.integers(0, cands.size)])
+                if not taken[s : s + w].any():
+                    taken[s : s + w] = True
+                    spans.append((s, s + w - 1))
+                    placed = True
+                    break
+            if not placed:
+                break
+        if len(spans) == len(widths):
+            return spans
+    return None
 
 
 def placement_test(rates, blocks, *, permutations: int = PERMUTATIONS,
-                   rng=None, usable=None, min_usable: int = 5) -> PlacementTest:
+                   rng=None, usable=None, min_usable: int = 5,
+                   restrict: bool = True, within=None) -> PlacementTest:
     """Is the region/background ratio unusual for blocks of these widths?
 
     Two-sided: a region that evolves FASTER than its background is as much a
@@ -322,41 +382,79 @@ def placement_test(rates, blocks, *, permutations: int = PERMUTATIONS,
     observed = contrast(rates, mask, usable=keep).ratio
     rng = np.random.default_rng() if rng is None else rng
 
-    # The blocks are relocated over the WHOLE alignment, because that is the
-    # geometry they could really have occupied, and only then restricted to
-    # the usable columns. Placing them over the usable columns alone would
-    # compare against arrangements that avoid the gappy regions by
-    # construction -- an ability the real blocks never had.
+    # A placement has to rest on about as many usable columns as the real
+    # blocks do, or the null is noisier than the observation it is compared
+    # with and the test is conservative for a reason that has nothing to do
+    # with biology. Blocks are defined only where coverage is sufficient, so
+    # the real ones sit on well-filled columns; scattered at random over an
+    # alignment that is mostly sparse, most placements rest on a quarter as
+    # many estimable sites and the null fans out accordingly.
+    #
+    # Matching the usable COUNT instead was tried and is not available: random
+    # placements cannot be as well covered as the real blocks, because the real
+    # ones sit in the occupied core by construction, so the requirement rejects
+    # essentially every placement. Confining the geometry to that core is the
+    # comparison that exists -- "among regions of the protein that are
+    # alignable across the family, are these the slow ones?".
+    #
+    # The observed blocks need not lie WHOLLY inside the allowed columns, and
+    # how far they do is reported rather than enforced: shrinking the null to
+    # match would answer a narrower question than the one asked.
+    allowed = within if within is not None else (keep if restrict else None)
+    observed_inside = int((mask & keep).sum())
+    n_block_columns = int(mask.sum())
+    outside_allowed = (0 if allowed is None
+                       else int((mask & ~np.asarray(allowed, dtype=bool)).sum()))
     null = np.empty(permutations, dtype=float)
+    thin = 0
     for i in range(permutations):
-        placed = place_blocks(widths, rates.size, rng)
+        placed = place_blocks(widths, rates.size, rng, within=allowed)
+        if placed is None:
+            null[i] = np.nan
+            thin += 1
+            continue
         m = column_mask(placed, rates.size)
         inside = rates[m & keep]
         outside = rates[~m & keep]
         if inside.size < min_usable or outside.size == 0 or outside.mean() == 0:
             null[i] = np.nan
+            thin += 1
             continue
         null[i] = inside.mean() / outside.mean()
 
     good = null[~np.isnan(null)]
     if good.size < permutations // 2:
         raise ValueError(
-            f"only {good.size} of {permutations} placements left at least "
-            f"{min_usable} usable column(s) inside the blocks. The usable "
-            f"columns are too sparse for a placement null on this alignment; "
-            f"lower the occupancy cutoff or trim before testing."
+            f"only {good.size} of {permutations} placements worked "
+            f"({thin} rejected). The allowed columns are too sparse or too "
+            f"fragmented to place blocks of these widths; lower "
+            f"--min-occupancy, or pass restrict=False and read the much wider "
+            f"null for what it is."
         )
-    centre = float(np.median(good))
-    extreme = int(np.sum(np.abs(good - centre) >= abs(observed - centre)))
+    good = good[good > 0]
+
+    # A ratio is bounded below by zero and unbounded above, so its null is
+    # skewed and |observed - median| treats a halving as milder than a
+    # doubling. On the log scale the two are the same distance, which is what
+    # "two-sided" has to mean for a ratio. Measured on the raw scale an
+    # observation sitting exactly at the 2.5th percentile of the null can come
+    # back at p = 0.16, because the long upper tail supplies the comparisons.
+    logs = np.log(good)
+    centre_log = float(np.median(logs))
+    obs_log = float(np.log(observed)) if observed > 0 else float("-inf")
+    extreme = int(np.sum(np.abs(logs - centre_log) >= abs(obs_log - centre_log)))
     p = (extreme + 1) / (good.size + 1)
     return PlacementTest(
         observed=float(observed),
         p_value=float(p),
         permutations=int(good.size),
-        null_median=centre,
+        null_median=float(np.exp(centre_log)),
         null_lo=float(np.percentile(good, 2.5)),
         null_hi=float(np.percentile(good, 97.5)),
         widths=tuple(widths),
+        n_block_columns=n_block_columns,
+        observed_usable=observed_inside,
+        outside_allowed=outside_allowed,
     )
 
 
@@ -427,8 +525,15 @@ def format_region_report(summary: RegionRates, test: PlacementTest | None = None
             f"{len(test.widths)} block(s)",
             f"    null ratio median {test.null_median:.4f}, "
             f"95% of null between {test.null_lo:.4f} and {test.null_hi:.4f}",
-            f"    p = {test.p_value:.4g} (two-sided)",
+            f"    p = {test.p_value:.4g} (two-sided, on the log of the ratio)",
         ]
+        if test.outside_allowed:
+            lines.append(
+                f"    {test.outside_allowed} of {test.n_block_columns} block "
+                f"column(s) lie outside the columns placements were confined")
+            lines.append(
+                f"    to, so the observation sits slightly outside the class "
+                f"it is compared with")
         if test.p_value > 0.05:
             lines.append(
                 "    -> blocks of these widths placed anywhere would look like "

@@ -37,13 +37,24 @@ Untrimmed alignments carry columns held by a handful of sequences, and a site
 rate estimated from a handful of tips is noise wearing the same units as a rate
 estimated from hundreds. occupancy() measures per-column fill and `usable`
 restricts the contrast to columns worth comparing -- applied to BOTH sides,
-since applying it to one is how a filter becomes a thumb on the scale. The null
-still relocates blocks over the whole alignment and only then restricts: placing
-them over the usable columns alone would compare against arrangements that
-avoid the gappy regions by construction, an ability the real blocks never had.
-Placements left resting on fewer than min_usable usable columns are dropped
-rather than averaged in, and when most placements fail the test refuses instead
-of reporting what the survivors happened to say.
+since applying it to one is how a filter becomes a thumb on the scale.
+
+Placements are confined to those columns too. A block is only defined where
+coverage reaches a threshold, so the real blocks sit in the occupied core by
+construction; relocating them across a mostly-sparse alignment compares them
+against arrangements the defining procedure could never have produced, and does
+it with a quarter as many estimable sites per placement. The null then fans out
+until nothing can reach significance -- on a real 2825-column alignment with 652
+usable columns it ran from 0.55 to 1.76, and an observation sitting exactly on
+its lower 2.5% edge came back unremarkable. The observed blocks need not lie
+wholly inside the allowed columns; how far they do is reported rather than
+enforced, since shrinking the null to match would answer a narrower question.
+
+The two-sided p-value is computed on the log of the ratio. A ratio is bounded
+by zero below and unbounded above, so its null is skewed and |observed - median|
+counts a halving as milder than a doubling. Measured that way an observation at
+the 2.5th percentile of the null returns about 0.14 where the answer is near
+0.05. A test pins this down on a deliberately skewed null.
 
 partition_text writes the same region split as a NEXUS partition, so the
 likelihood can estimate the rate multipliers directly with the tree fixed. The
@@ -55,4 +66,4 @@ No circularity: APR blocks are defined by predictor occupancy, not by
 conservation. Were they defined by conservation, this contrast would restate
 the definition rather than measure anything.
 
-32 tests.
+35 tests.
