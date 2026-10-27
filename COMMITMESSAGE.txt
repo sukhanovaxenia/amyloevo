@@ -33,6 +33,18 @@ alignment width when given one. A rate file from a different alignment parses
 perfectly and produces a confident, meaningless contrast; the site count is the
 only thing that catches it.
 
+Untrimmed alignments carry columns held by a handful of sequences, and a site
+rate estimated from a handful of tips is noise wearing the same units as a rate
+estimated from hundreds. occupancy() measures per-column fill and `usable`
+restricts the contrast to columns worth comparing -- applied to BOTH sides,
+since applying it to one is how a filter becomes a thumb on the scale. The null
+still relocates blocks over the whole alignment and only then restricts: placing
+them over the usable columns alone would compare against arrangements that
+avoid the gappy regions by construction, an ability the real blocks never had.
+Placements left resting on fewer than min_usable usable columns are dropped
+rather than averaged in, and when most placements fail the test refuses instead
+of reporting what the survivors happened to say.
+
 partition_text writes the same region split as a NEXUS partition, so the
 likelihood can estimate the rate multipliers directly with the tree fixed. The
 permutation test asks whether the rates look different and the partitioned
@@ -43,4 +55,4 @@ No circularity: APR blocks are defined by predictor occupancy, not by
 conservation. Were they defined by conservation, this contrast would restate
 the definition rather than measure anything.
 
-23 tests.
+32 tests.

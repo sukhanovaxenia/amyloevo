@@ -223,3 +223,100 @@ def test_report_names_the_direction():
     rates2[0:10] = 5.0
     summary2 = rr.contrast(rates2, rr.column_mask([(0, 9)], 100))
     assert "FASTER" in rr.format_region_report(summary2, name="APR")
+
+
+# --------------------------------------------------------------------------- #
+# occupancy and the symmetric filter
+
+def test_occupancy_counts_residues_per_column(tmp_path):
+    p = tmp_path / "a.faa"
+    p.write_text(">x\nAB-D\n>y\nA--D\n>z\nAB-D\n")
+    assert rr.occupancy(p).tolist() == pytest.approx([1.0, 2 / 3, 0.0, 1.0])
+
+
+def test_occupancy_refuses_an_unaligned_file(tmp_path):
+    p = tmp_path / "b.faa"
+    p.write_text(">x\nABCD\n>y\nAB\n")
+    with pytest.raises(ValueError, match="not an alignment"):
+        rr.occupancy(p)
+
+
+def test_occupancy_accepts_a_mapping():
+    assert rr.occupancy({"x": "A-C", "y": "ABC"}).tolist() == pytest.approx(
+        [1.0, 0.5, 1.0])
+
+
+def test_usable_is_applied_to_both_sides():
+    rates = np.array([1.0, 99.0, 1.0, 3.0, 99.0, 3.0])
+    mask = np.array([True, True, True, False, False, False])
+    keep = np.array([True, False, True, True, False, True])
+    summary = rr.contrast(rates, mask, usable=keep)
+    assert summary.mean_region == 1.0        # the 99 inside is excluded
+    assert summary.mean_background == 3.0    # and so is the 99 outside
+    assert summary.n_region == 2 and summary.n_background == 2
+
+
+def test_filtering_one_side_only_would_change_the_answer():
+    # guards the symmetry: if `usable` were applied to the region alone the
+    # background would keep its outlier and the ratio would collapse
+    rates = np.array([1.0, 99.0, 1.0, 3.0, 99.0, 3.0])
+    mask = np.array([True, True, True, False, False, False])
+    keep = np.array([True, False, True, True, False, True])
+    symmetric = rr.contrast(rates, mask, usable=keep).ratio
+    lopsided = rates[mask & keep].mean() / rates[~mask].mean()
+    assert symmetric == pytest.approx(1 / 3)
+    assert lopsided != pytest.approx(symmetric)
+
+
+def test_placement_test_honours_usable():
+    rates = np.ones(300)
+    rates[100:140] = 0.05
+    junk = np.zeros(300, dtype=bool)
+    junk[::7] = True                      # scattered unusable columns
+    keep = ~junk
+    result = rr.placement_test(rates, [(100, 139)], permutations=300,
+                               rng=np.random.default_rng(11), usable=keep)
+    assert result.observed < 0.2
+    assert result.p_value < 0.01
+
+
+def test_blocks_with_no_usable_column_are_refused():
+    """The observed contrast fails first, and says so in its own terms."""
+    rates = np.ones(200)
+    keep = np.zeros(200, dtype=bool)
+    keep[:12] = True                      # the blocks sit outside all of it
+    with pytest.raises(ValueError, match="needs both sides"):
+        rr.placement_test(rates, [(150, 179)], permutations=100,
+                          rng=np.random.default_rng(12), usable=keep)
+
+
+def test_a_null_that_mostly_lands_outside_the_usable_columns_is_refused():
+    """The observed blocks are fine; the PLACEMENTS are not, and that is a
+    different failure. Averaging the few placements that happened to land on
+    usable columns would answer a question nobody asked."""
+    rates = np.ones(400)
+    rates[5:35] = 0.2
+    keep = np.zeros(400, dtype=bool)
+    keep[:40] = True                      # observed block usable, most placements not
+    with pytest.raises(ValueError, match="too sparse"):
+        rr.placement_test(rates, [(5, 34)], permutations=200,
+                          rng=np.random.default_rng(13), usable=keep)
+
+
+def test_min_usable_excludes_placements_resting_on_a_handful_of_columns():
+    """A placement overlapping two usable columns yields a ratio computed from
+    two numbers. Keeping those widens the null with noise and makes the test
+    look more conservative than it is, so they are dropped rather than
+    averaged in -- and the threshold has to be seen to do something."""
+    rates = np.ones(400)
+    rates[20:50] = 0.3
+    keep = np.zeros(400, dtype=bool)
+    keep[:300] = True
+    lax = rr.placement_test(rates, [(20, 49)], permutations=400,
+                            rng=np.random.default_rng(21), usable=keep,
+                            min_usable=1)
+    strict = rr.placement_test(rates, [(20, 49)], permutations=400,
+                               rng=np.random.default_rng(21), usable=keep,
+                               min_usable=25)
+    assert strict.permutations < lax.permutations
+    assert lax.observed == pytest.approx(strict.observed)

@@ -191,13 +191,69 @@ def read_site_rates(path, *, n_columns: int | None = None) -> np.ndarray:
     return rates
 
 
-def contrast(rates, mask) -> RegionRates:
-    """Rate summary inside the mask and outside it."""
+def occupancy(alignment) -> np.ndarray:
+    """Fraction of sequences with a residue at each column.
+
+    An untrimmed alignment carries columns held by a handful of sequences, and
+    a site rate estimated from a handful of tips is noise wearing the same
+    units as a rate estimated from hundreds. Those columns have to be excluded
+    from BOTH sides of a contrast or from neither -- excluding them from one
+    side is how a filter becomes a thumb on the scale -- which is what the
+    ``usable`` argument below is for.
+
+    ``alignment`` is a mapping of name to aligned sequence, or a FASTA path.
+    """
+    if isinstance(alignment, (str, Path)):
+        seqs: list[str] = []
+        current: list[str] = []
+        for line in Path(alignment).read_text().splitlines():
+            if line.startswith(">"):
+                if current:
+                    seqs.append("".join(current))
+                current = []
+            else:
+                current.append(line.strip())
+        if current:
+            seqs.append("".join(current))
+    else:
+        seqs = [str(v) for v in alignment.values()]
+    if not seqs:
+        raise ValueError(f"{alignment}: no sequences")
+    widths = {len(s) for s in seqs}
+    if len(widths) != 1:
+        raise ValueError(
+            f"not an alignment: {len(widths)} different lengths, "
+            f"{min(widths)}..{max(widths)}"
+        )
+    arr = np.frombuffer("".join(seqs).encode("ascii"), dtype="S1")
+    arr = arr.reshape(len(seqs), widths.pop())
+    filled = ~np.isin(arr, [b"-", b".", b"~", b" "])
+    return filled.mean(axis=0)
+
+
+def _usable_mask(usable, n: int) -> np.ndarray:
+    if usable is None:
+        return np.ones(n, dtype=bool)
+    out = np.asarray(usable, dtype=bool)
+    if out.shape != (n,):
+        raise ValueError(f"usable has shape {out.shape}, expected ({n},)")
+    return out
+
+
+def contrast(rates, mask, *, usable=None) -> RegionRates:
+    """Rate summary inside the mask and outside it.
+
+    ``usable`` restricts the comparison to columns worth comparing -- those
+    with enough occupancy for their rate to mean anything. It is applied to
+    both sides, which is the only way a filter can be applied without
+    deciding the answer.
+    """
     rates = np.asarray(rates, dtype=float)
     mask = np.asarray(mask, dtype=bool)
     if rates.shape != mask.shape:
         raise ValueError(f"rates {rates.shape} and mask {mask.shape} differ")
-    inside, outside = rates[mask], rates[~mask]
+    keep = _usable_mask(usable, rates.size)
+    inside, outside = rates[mask & keep], rates[~mask & keep]
     if inside.size == 0 or outside.size == 0:
         raise ValueError(
             f"{inside.size} column(s) in the regions and {outside.size} "
@@ -246,7 +302,7 @@ def place_blocks(widths, n_columns: int, rng) -> list[tuple[int, int]]:
 
 
 def placement_test(rates, blocks, *, permutations: int = PERMUTATIONS,
-                   rng=None) -> PlacementTest:
+                   rng=None, usable=None, min_usable: int = 5) -> PlacementTest:
     """Is the region/background ratio unusual for blocks of these widths?
 
     Two-sided: a region that evolves FASTER than its background is as much a
@@ -262,18 +318,34 @@ def placement_test(rates, blocks, *, permutations: int = PERMUTATIONS,
     spans = _as_spans(blocks)
     widths = [stop - start + 1 for start, stop in spans]
     mask = column_mask(spans, rates.size)
-    observed = contrast(rates, mask).ratio
+    keep = _usable_mask(usable, rates.size)
+    observed = contrast(rates, mask, usable=keep).ratio
     rng = np.random.default_rng() if rng is None else rng
 
+    # The blocks are relocated over the WHOLE alignment, because that is the
+    # geometry they could really have occupied, and only then restricted to
+    # the usable columns. Placing them over the usable columns alone would
+    # compare against arrangements that avoid the gappy regions by
+    # construction -- an ability the real blocks never had.
     null = np.empty(permutations, dtype=float)
     for i in range(permutations):
         placed = place_blocks(widths, rates.size, rng)
         m = column_mask(placed, rates.size)
-        inside = rates[m]
-        outside = rates[~m]
-        null[i] = inside.mean() / outside.mean() if outside.mean() else np.nan
+        inside = rates[m & keep]
+        outside = rates[~m & keep]
+        if inside.size < min_usable or outside.size == 0 or outside.mean() == 0:
+            null[i] = np.nan
+            continue
+        null[i] = inside.mean() / outside.mean()
 
     good = null[~np.isnan(null)]
+    if good.size < permutations // 2:
+        raise ValueError(
+            f"only {good.size} of {permutations} placements left at least "
+            f"{min_usable} usable column(s) inside the blocks. The usable "
+            f"columns are too sparse for a placement null on this alignment; "
+            f"lower the occupancy cutoff or trim before testing."
+        )
     centre = float(np.median(good))
     extreme = int(np.sum(np.abs(good - centre) >= abs(observed - centre)))
     p = (extreme + 1) / (good.size + 1)
