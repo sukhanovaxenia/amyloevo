@@ -97,6 +97,18 @@ from .tree import (
     write_tree,
 )
 
+from .region_rates import (
+    PERMUTATIONS,
+    PlacementTest,
+    RegionRates,
+    column_mask,
+    contrast,
+    format_region_report,
+    partition_text,
+    placement_test,
+    read_site_rates,
+)
+
 __all__ = [
     # estimate
     "LAMBDA_CEILING",
@@ -159,4 +171,14 @@ __all__ = [
     "screen_by_clade",
     "tasks",
     "usable",
+    # regions phylo
+    "PERMUTATIONS",
+    "PlacementTest",
+    "RegionRates",
+    "column_mask",
+    "contrast",
+    "format_region_report",
+    "partition_text",
+    "placement_test",
+    "read_site_rates",
 ]

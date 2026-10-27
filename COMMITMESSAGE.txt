@@ -1,78 +1,46 @@
-feat(phylo): a constrained root, nodes left to be estimated, and a bracket
+phylo: rate of a region against the rest of the alignment
 
-Two collisions that drop_unresolvable could not see, and a way to bound a
-duplication without a clock. Both came from the same run: a set of 96
-calibrations that dated cleanly with a free root, and failed the moment a root
-bound was added, with LSD2 naming neither the nodes nor the ages.
+rates.py answers which clade accumulated more substitutions. This answers a
+different question on the same tree: whether a set of regions -- APR blocks, a
+domain, any column set -- evolves at a different rate from the rest of the
+protein. The two are independent; a paralogue can be the slower clade overall
+and still hold its amyloidogenic core more tightly than its own background.
 
-drop_unresolvable looked for one kind of collision only -- two calibrations
-merged by branch collapse onto one node, which is two dates for one node. It
-found those. It could not find either of the other two, and for the same
-reason in both cases: nothing in the calibration set contradicts anything, so
-no check on the set alone can see it.
+The comparison is within-sequence, which is why it needs nothing from outside
+the alignment. Every column is seen through the same tree, the same taxa and
+the same elapsed time, so none of those can explain a difference between
+columns. No calibration, no contemporaneity argument, no outgroup.
 
-A calibration that collapses onto the ROOT is consistent with every other
-calibration. It becomes a contradiction only when the run pins the root, which
-is why a set that worked can stop working when a root bound is added and
-nothing about the set has changed. root_age now names that age, and
-calibrations in the root's merge group are dropped against it.
+Three decisions worth recording.
 
-A calibration that collapses onto a node whose age is the RESULT is worse,
-because it does not fail. The node carries exactly one age, the run reports
-nothing unusual, and the duplication's date comes back as whatever the species
-tree put there. The output then agrees with the literature because it came
-from the literature, which is the circularity the whole scheme was built to
-avoid: calibrations go on speciations inside the paralogue clades and never on
-the duplications, precisely so that the duplication ages are estimated rather
-than asserted. Branch collapse puts them there anyway. estimate= names those
-nodes by pairs of descendant tips and the collision is caught.
+The null relocates whole blocks rather than shuffling columns. Rates are
+autocorrelated along a protein, so a column-shuffling null is one no real
+region could satisfy and it returns significance for almost any region set.
+Relocating blocks intact, keeping their widths and their number, tests the
+question actually asked -- would regions of these sizes, placed anywhere in
+this protein, look like this? -- and leaves the autocorrelation present under
+the null as well as in the data. The test suite pins this down: swapping the
+null for a column shuffle turns 12 tolerated false positives into 33 of 60.
 
-Each dropped calibration now carries a reason, and format_dropped groups by it
-rather than by clade, because the three are not the same problem and do not
-have the same fix.
+Labels are refused, not parsed. Block.label() renders reference-residue numbers
+where the reference covers the block and falls back to a col-prefixed form
+where it does not, so a label set mixes two coordinate systems and parsing it
+back into columns misplaces every block of one kind or the other. The functions
+take Block objects or (start, stop) column pairs, and a string raises.
 
-bracket() is the other half. A duplication is older than any speciation
-retained in BOTH daughter lineages and younger than the shallowest speciation
-at which the daughters are not all present. Both bounds are speciation ages
-read off the dated species tree; neither uses a branch length of the gene tree.
+read_site_rates finds its columns by name and checks the site count against the
+alignment width when given one. A rate file from a different alignment parses
+perfectly and produces a confident, meaningless contrast; the site count is the
+only thing that catches it.
 
-That matters because the gene tree's branch lengths are the part rate
-heterogeneity corrupts, and on this family it is not a small effect. Three
-measurements, each with elapsed time held constant by construction: two copies
-in one chondrichthyan genome give root-to-tip 0.6522 against 0.3131, a ratio of
-2.08 at support 100 on both nodes; within one paralogue group, mammals run
-0.002-0.018 against teleosts at 0.40-0.49; within one cyclostome duplication,
-one daughter pair carries 0.192 and 0.151 against 0.699 and 0.357 in the other.
-A single global rate is therefore false as a premise rather than approximate as
-a model, and a point estimate from a strict clock states the clock rather than
-the sequences. The least-squares run that prompted this returned a root age of
--7487 Myr, older than the Earth.
+partition_text writes the same region split as a NEXUS partition, so the
+likelihood can estimate the rate multipliers directly with the tree fixed. The
+permutation test asks whether the rates look different and the partitioned
+model asks how different; agreement between them is worth more than either
+alone. The zero-based to one-based conversion happens there and nowhere else.
 
-Two decisions inside bracket() are worth naming because they could reasonably
-have gone the other way.
+No circularity: APR blocks are defined by predictor occupancy, not by
+conservation. Were they defined by conservation, this contrast would restate
+the definition rather than measure anything.
 
-The upper bound is set only by species the GENE tree holds. A species in the
-species tree with no gene in the analysis is absence of evidence: it may carry
-every daughter and simply not have been searched, and letting it bound the
-answer would convert a gap in the sampling into a result. With nothing sampled
-that lacks a daughter, the function raises instead of inventing a bound.
-
-A lower bound needs two witnesses. One species cannot witness a speciation, so
-a node where only one species carries a gene in every daughter is refused
-rather than given its own age as a bound.
-
-The bounds can meet, and then there is no interval. That happens when a species
-nested inside the clade carrying the lower bound has a gene but not in every
-daughter -- ordinarily loss, which the bracket cannot distinguish from never
-having had the paralogue, and otherwise a gene tree that disagrees with the
-species tree or a sequence in the wrong daughter. Bracket.empty reports it and
-format_bracket names the species that closed the interval, rather than printing
-a width of zero as though it were precision.
-
-The width is not uncertainty. It is the resolution the taxon sampling affords,
-and it narrows only when a species branching between the two bounds is added --
-not by more sequences of species already inside. On the set this was written
-for, adding a lamprey, a hagfish and a chimaera took the interval from more
-than 150 Myr to under 40.
-
-12 tests, 426 pass.
+23 tests.
