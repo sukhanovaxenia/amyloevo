@@ -460,7 +460,9 @@ def placement_test(rates, blocks, *, permutations: int = PERMUTATIONS,
 
 def partition_text(blocks, n_columns: int, *, model: str = "JTT+R4",
                    region_name: str = "apr",
-                   background_name: str = "background") -> str:
+                   background_name: str = "background",
+                   usable=None, excluded_name: str = "unusable",
+                   excluded_model: str | None = None) -> str:
     """A NEXUS partition putting the regions and the rest in separate sets.
 
     The permutation test asks whether the rates LOOK different; a partitioned
@@ -468,37 +470,67 @@ def partition_text(blocks, n_columns: int, *, model: str = "JTT+R4",
     per set with the tree held fixed. They answer the same question from
     opposite directions, and agreement between them is worth more than either.
 
+    ``usable`` must be the SAME mask the contrast uses. Without it the
+    background set takes every remaining column, including the sparse ones --
+    and sparse columns sit in indel-rich, poorly alignable stretches that are
+    genuinely fast, so the background speeds up and the region looks more
+    constrained than it is. The permutation test excludes those columns; a
+    partition model that keeps them is not measuring the same thing, and the
+    two results then agree or disagree for reasons that have nothing to do
+    with the biology.
+
+    Excluded columns go into a third set rather than being left out of the
+    file: every site has to belong to some partition, and dropping them
+    silently is how a partition file comes to cover 650 of 2825 sites without
+    saying so. The third set's own speed is not interpreted. Speeds are
+    relative to the mean across partitions, so its presence shifts all of them
+    together and leaves the region-to-background ratio untouched.
+
     Column numbers are written one-based and inclusive, as NEXUS wants, from
     the zero-based spans ``conserve.blocks`` produces. That conversion is the
     single place an off-by-one can enter this file, which is why it happens
     here and not in the caller.
     """
     mask = column_mask(blocks, n_columns)
+    keep = _usable_mask(usable, n_columns)
 
-    def runs(flag: bool) -> list[str]:
+    def runs(flags) -> list[str]:
         out, start = [], None
         for i in range(n_columns):
-            if mask[i] == flag and start is None:
+            if flags[i] and start is None:
                 start = i
-            elif mask[i] != flag and start is not None:
+            elif not flags[i] and start is not None:
                 out.append(f"{start + 1}-{i}")
                 start = None
         if start is not None:
             out.append(f"{start + 1}-{n_columns}")
         return out
 
-    region, background = runs(True), runs(False)
+    region = runs(mask & keep)
+    background = runs(~mask & keep)
+    dropped = runs(~keep)
     if not region or not background:
-        raise ValueError("a partition needs columns on both sides")
-    return (
-        "#nexus\n"
-        "begin sets;\n"
-        f"  charset {region_name} = {' '.join(region)};\n"
-        f"  charset {background_name} = {' '.join(background)};\n"
-        f"  charpartition regions = {model}:{region_name}, "
-        f"{model}:{background_name};\n"
-        "end;\n"
-    )
+        raise ValueError(
+            f"a partition needs columns on both sides: "
+            f"{int((mask & keep).sum())} usable in the regions, "
+            f"{int((~mask & keep).sum())} usable outside"
+        )
+    sets = [f"  charset {region_name} = {' '.join(region)};",
+            f"  charset {background_name} = {' '.join(background)};"]
+    parts = [f"{model}:{region_name}", f"{model}:{background_name}"]
+    if dropped:
+        # The excluded set exists to keep every site covered, and its own speed
+        # is never interpreted. On real data it was 2152 columns carrying 26
+        # informative sites: fitting four free rate categories to that is a
+        # numerical liability and nothing else, and it is where IQ-TREE's
+        # free-rate EM step aborts. So it gets the model without the
+        # rate-heterogeneity term unless the caller insists otherwise.
+        junk = excluded_model if excluded_model else model.split("+")[0]
+        sets.append(f"  charset {excluded_name} = {' '.join(dropped)};")
+        parts.append(f"{junk}:{excluded_name}")
+    return ("#nexus\nbegin sets;\n" + "\n".join(sets) + "\n"
+            f"  charpartition regions = {', '.join(parts)};\n"
+            "end;\n")
 
 
 def format_region_report(summary: RegionRates, test: PlacementTest | None = None,

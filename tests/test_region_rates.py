@@ -374,3 +374,53 @@ def test_two_sided_p_is_calibrated_on_a_skewed_null():
     assert result.p_value < 0.10, (
         f"p={result.p_value:.4f} for an observation at the 2.5th percentile; "
         f"the statistic is not measuring both directions alike")
+
+
+def test_partition_excludes_the_same_columns_as_the_contrast():
+    """The background must not quietly take the sparse columns the contrast
+    threw out: those sit in indel-rich, badly alignable stretches and are
+    genuinely fast, so keeping them inflates the background and the region
+    looks more constrained than it is."""
+    keep = np.array([True] * 6 + [False] * 4)
+    text = rr.partition_text([(0, 2)], 10, model="LG+G4", usable=keep)
+    assert "charset apr = 1-3;" in text
+    assert "charset background = 4-6;" in text
+    assert "charset unusable = 7-10;" in text
+    # every site belongs to some partition: none dropped without saying so.
+    # The excluded set carries a plain model, so count the assignments rather
+    # than the model string.
+    charpartition = [ln for ln in text.splitlines() if "charpartition" in ln][0]
+    assert charpartition.count(":") == 3
+    assert "LG+G4:apr" in text and "LG+G4:background" in text
+
+
+def test_partition_without_a_mask_keeps_every_column_in_two_sets():
+    text = rr.partition_text([(0, 2)], 10)
+    assert "charset apr = 1-3;" in text
+    assert "charset background = 4-10;" in text
+    assert "unusable" not in text
+
+
+def test_partition_refuses_when_a_side_has_no_usable_column():
+    keep = np.array([True] * 3 + [False] * 7)
+    with pytest.raises(ValueError, match="both sides"):
+        rr.partition_text([(0, 2)], 10, usable=keep)
+
+
+def test_the_excluded_set_gets_a_model_without_rate_heterogeneity():
+    """Its speed is never read, it carries almost no information, and it is
+    where IQ-TREE's free-rate optimiser aborts. Four rate categories there buy
+    nothing and cost the whole run."""
+    keep = np.array([True] * 6 + [False] * 4)
+    text = rr.partition_text([(0, 2)], 10, model="JTT+R4", usable=keep)
+    assert "JTT+R4:apr" in text
+    assert "JTT+R4:background" in text
+    assert "JTT:unusable" in text
+    assert "JTT+R4:unusable" not in text
+
+
+def test_the_excluded_model_can_be_named_outright():
+    keep = np.array([True] * 6 + [False] * 4)
+    text = rr.partition_text([(0, 2)], 10, model="JTT+G4", usable=keep,
+                             excluded_model="LG")
+    assert "LG:unusable" in text

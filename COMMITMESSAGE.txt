@@ -62,8 +62,27 @@ permutation test asks whether the rates look different and the partitioned
 model asks how different; agreement between them is worth more than either
 alone. The zero-based to one-based conversion happens there and nowhere else.
 
+It takes the usable mask too, and must. Without it the background set collects
+every remaining column including the sparse ones, which sit in indel-rich,
+badly alignable stretches and are genuinely fast; the background speeds up and
+the region looks more constrained than it is. On real data that moved the
+region-to-background speed ratio from around 0.36-0.47 to its honest value.
+Excluded columns go into a third set rather than being left out of the file,
+since every site must belong to a partition and dropping them silently is how
+a file comes to cover 650 of 2825 sites without saying so. Speeds are relative
+to the mean across partitions, so the third set shifts all of them together and
+leaves the ratio of interest untouched.
+
+The excluded set gets the model without its rate-heterogeneity term. Its own
+speed is never interpreted -- it exists so that every site belongs to a
+partition -- and on real data it was 2152 columns carrying 26 informative
+sites against 2078 constant ones. Fitting four rate categories to that is a
+numerical liability and nothing else; it is where IQ-TREE's free-rate EM step
+aborts on its own assertion. A caller who wants a different model there can
+name one.
+
 No circularity: APR blocks are defined by predictor occupancy, not by
 conservation. Were they defined by conservation, this contrast would restate
 the definition rather than measure anything.
 
-35 tests.
+40 tests.
