@@ -195,6 +195,34 @@ def label_map(table, **kwargs) -> dict[str, str]:
 MIN_GROUP_SIZE = 5
 
 
+def _rank_value(raw) -> str:
+    """The value of one taxonomy rank, or "" when the rank is missing.
+
+    A missing rank is not a group, and recognising that is harder than it
+    looks. pandas reads an absent cell as NaN; NaN is TRUTHY and str(NaN) is
+    "nan", so an emptiness check written as ``if raw and str(raw).strip()``
+    passes it through and the legend gains a group named "nan". Reading the
+    same file with csv gives "" instead, so the fault appears only through a
+    DataFrame -- which is the documented input.
+
+    On the FXR1 family this was the one sequence with no phylum: a
+    choanoflagellate, and the taxonomically most informative tip of the
+    invertebrate subtree. Named "nan" it was indistinguishable from a parsing
+    accident, so the bug did not merely add a label -- it concealed the fact
+    the figure existed to show. Treated as missing, it falls through to the
+    next rank and the legend reads Choanoflagellata.
+    """
+    if raw is None:
+        return ""
+    try:
+        if raw != raw:          # NaN is the only value unequal to itself
+            return ""
+    except TypeError:
+        pass
+    text = str(raw).strip()
+    return "" if text.lower() in ("", "nan", "none", "na", "<na>", "null") else text
+
+
 def major_groups(
     table,
     ranks=("class", "phylum"),
@@ -238,14 +266,13 @@ def major_groups(
 
     for depth, rank in enumerate(ranks):
         counts = Counter(
-            str(values[rank][i]) for i in pending
-            if values[rank].get(i) and str(values[rank][i]).strip()
+            name for name in (_rank_value(values[rank].get(i)) for i in pending)
+            if name
         )
         keep = {name for name, n in counts.items() if n >= min_size}
         remainder = []
         for i in pending:
-            name = values[rank].get(i)
-            name = str(name).strip() if name else ""
+            name = _rank_value(values[rank].get(i))
             if name in keep:
                 assigned[i] = name if depth == 0 else name + suffix
             else:

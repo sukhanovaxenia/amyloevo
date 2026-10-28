@@ -239,3 +239,39 @@ def test_this_matches_amyloscopes_implementation_of_the_same_policy() -> None:
     theirs, their_n = amyloscope.build_labels(rows)
     assert ours == [theirs[r["id"]] for r in rows]
     assert our_n == their_n
+
+
+def test_a_missing_rank_does_not_become_a_group_named_nan():
+    """pandas reads an absent cell as NaN, NaN is truthy, and str(NaN) is
+    "nan" -- so an emptiness check that works for csv's "" lets NaN through
+    and the legend gains a group called "nan". The row must fall through to
+    the next rank instead."""
+    import pandas as pd
+
+    from amyloevo.io.annotate import major_groups
+
+    table = pd.DataFrame({
+        "id": ["a", "b", "c", "d"],
+        "phylum": ["Arthropoda", "Arthropoda", "Arthropoda", None],
+        "class": ["Insecta", "Insecta", "Insecta", "Choanoflagellata"],
+    })
+    groups = major_groups(table, ("phylum", "class"), min_size=1, suffix="")
+    assert groups["d"] == "Choanoflagellata"
+    assert "nan" not in set(groups.values())
+
+
+def test_a_missing_rank_is_recognised_whatever_spells_it():
+    import pandas as pd
+
+    from amyloevo.io.annotate import major_groups
+
+    table = pd.DataFrame({
+        "id": ["a", "b", "c", "d", "e"],
+        "phylum": ["Arthropoda", "", "  ", "NaN", "nan"],
+        "class": ["Insecta", "Clitellata", "Cestoda", "Ascidiacea", "Trematoda"],
+    })
+    groups = major_groups(table, ("phylum", "class"), min_size=1, suffix="")
+    assert groups["a"] == "Arthropoda"
+    for key, expected in (("b", "Clitellata"), ("c", "Cestoda"),
+                          ("d", "Ascidiacea"), ("e", "Trematoda")):
+        assert groups[key] == expected, f"{key} fell through as {groups[key]!r}"

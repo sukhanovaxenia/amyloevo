@@ -1,88 +1,38 @@
-phylo: rate of a region against the rest of the alignment
+io: a missing taxonomy rank is not a group
 
-rates.py answers which clade accumulated more substitutions. This answers a
-different question on the same tree: whether a set of regions -- APR blocks, a
-domain, any column set -- evolves at a different rate from the rest of the
-protein. The two are independent; a paralogue can be the slower clade overall
-and still hold its amyloidogenic core more tightly than its own background.
+major_groups collapses a taxonomy into the handful of groups a figure can
+show, trying each rank in turn and letting a row fall through to the next rank
+when its value is absent. The emptiness check was written as
 
-The comparison is within-sequence, which is why it needs nothing from outside
-the alignment. Every column is seen through the same tree, the same taxa and
-the same elapsed time, so none of those can explain a difference between
-columns. No calibration, no contemporaneity argument, no outgroup.
+    if raw and str(raw).strip()
 
-Three decisions worth recording.
+which is correct for a value read with csv, where an absent cell arrives as "".
+It is wrong for the documented input. ``table`` is a DataFrame, pandas reads an
+absent cell as NaN, NaN is TRUTHY, and str(NaN) is "nan" -- so the row did not
+fall through. It formed a group of its own, named "nan", and took a colour and a
+legend entry.
 
-The null relocates whole blocks rather than shuffling columns. Rates are
-autocorrelated along a protein, so a column-shuffling null is one no real
-region could satisfy and it returns significance for almost any region set.
-Relocating blocks intact, keeping their widths and their number, tests the
-question actually asked -- would regions of these sizes, placed anywhere in
-this protein, look like this? -- and leaves the autocorrelation present under
-the null as well as in the data. The test suite pins this down: swapping the
-null for a column shuffle turns 12 tolerated false positives into 33 of 60.
+The fault is invisible through csv and appears only through a DataFrame, which
+is why it survived: the same file read either way gives "" or NaN, and only one
+of those was handled.
 
-Labels are refused, not parsed. Block.label() renders reference-residue numbers
-where the reference covers the block and falls back to a col-prefixed form
-where it does not, so a label set mixes two coordinate systems and parsing it
-back into columns misplaces every block of one kind or the other. The functions
-take Block objects or (start, stop) column pairs, and a string raises.
+Found on the invertebrate subtree of the FXR1 family, where exactly one of 57
+sequences has no phylum -- Salpingoeca rosetta, a choanoflagellate, and the
+taxonomically most informative tip on that tree, since it is the only
+non-metazoan in a set of metazoan single-copy orthologues. Labelled "nan" it
+was indistinguishable from a parsing accident. So the bug did not merely add a
+legend entry: it concealed the one fact the figure existed to show. With the
+rank treated as missing the row falls through to class and the legend reads
+Choanoflagellata.
 
-read_site_rates finds its columns by name and checks the site count against the
-alignment width when given one. A rate file from a different alignment parses
-perfectly and produces a confident, meaningless contrast; the site count is the
-only thing that catches it.
+_rank_value centralises the test. NaN is detected by raw != raw, which is true
+of NaN alone, inside a try/except TypeError so that a value whose comparison
+raises is treated as present rather than crashing the call. The string forms
+are rejected too -- "nan", "none", "na", "<na>", "null" and whitespace -- because
+a table that has been through a CSV round-trip carries the word rather than the
+float, and a group named "none" is the same defect wearing a different spelling.
 
-Untrimmed alignments carry columns held by a handful of sequences, and a site
-rate estimated from a handful of tips is noise wearing the same units as a rate
-estimated from hundreds. occupancy() measures per-column fill and `usable`
-restricts the contrast to columns worth comparing -- applied to BOTH sides,
-since applying it to one is how a filter becomes a thumb on the scale.
-
-Placements are confined to those columns too. A block is only defined where
-coverage reaches a threshold, so the real blocks sit in the occupied core by
-construction; relocating them across a mostly-sparse alignment compares them
-against arrangements the defining procedure could never have produced, and does
-it with a quarter as many estimable sites per placement. The null then fans out
-until nothing can reach significance -- on a real 2825-column alignment with 652
-usable columns it ran from 0.55 to 1.76, and an observation sitting exactly on
-its lower 2.5% edge came back unremarkable. The observed blocks need not lie
-wholly inside the allowed columns; how far they do is reported rather than
-enforced, since shrinking the null to match would answer a narrower question.
-
-The two-sided p-value is computed on the log of the ratio. A ratio is bounded
-by zero below and unbounded above, so its null is skewed and |observed - median|
-counts a halving as milder than a doubling. Measured that way an observation at
-the 2.5th percentile of the null returns about 0.14 where the answer is near
-0.05. A test pins this down on a deliberately skewed null.
-
-partition_text writes the same region split as a NEXUS partition, so the
-likelihood can estimate the rate multipliers directly with the tree fixed. The
-permutation test asks whether the rates look different and the partitioned
-model asks how different; agreement between them is worth more than either
-alone. The zero-based to one-based conversion happens there and nowhere else.
-
-It takes the usable mask too, and must. Without it the background set collects
-every remaining column including the sparse ones, which sit in indel-rich,
-badly alignable stretches and are genuinely fast; the background speeds up and
-the region looks more constrained than it is. On real data that moved the
-region-to-background speed ratio from around 0.36-0.47 to its honest value.
-Excluded columns go into a third set rather than being left out of the file,
-since every site must belong to a partition and dropping them silently is how
-a file comes to cover 650 of 2825 sites without saying so. Speeds are relative
-to the mean across partitions, so the third set shifts all of them together and
-leaves the ratio of interest untouched.
-
-The excluded set gets the model without its rate-heterogeneity term. Its own
-speed is never interpreted -- it exists so that every site belongs to a
-partition -- and on real data it was 2152 columns carrying 26 informative
-sites against 2078 constant ones. Fitting four rate categories to that is a
-numerical liability and nothing else; it is where IQ-TREE's free-rate EM step
-aborts on its own assertion. A caller who wants a different model there can
-name one.
-
-No circularity: APR blocks are defined by predictor occupancy, not by
-conservation. Were they defined by conservation, this contrast would restate
-the definition rather than measure anything.
-
-40 tests.
+Two tests. The first pins the DataFrame case that failed: a row whose phylum is
+None must come back as its class, and "nan" must not appear among the group
+names. The second pins the spellings, each on its own row, so a regression
+names which form slipped through rather than reporting one opaque failure.
